@@ -10,7 +10,11 @@ GolfDB
     有官方視角標註（down-the-line / face-on / other），1391 段，是現成的對照實驗。
 Penn Action
     沒有視角標註。以骨盆的水平位移當代理量——側面拍時跨步是橫向的，位移大。
-    這是**推論不是標註**，其效度由「位移 vs 塌陷位置」的相關性支撐。
+    這是**推論不是標註**，其效度由「位移 vs 塌陷位置」的相關性、以及對實際畫面的
+    目視檢查支撐（低位移組確認為轉播中外野機位，高位移組為真正的側面）。
+
+近端節段（骨盆）的峰值出現在加速期前段，所以**整段的最小投影長度會誤導**——
+「尾端才塌」與「一開始就塌」對骨盆量測的影響完全不同。因此前後半分開統計。
 
     python scripts/viewpoint_analysis.py --output-dir docs/figures
 """
@@ -31,6 +35,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 from kinetic_chain.analysis import (  # noqa: E402
     CHAIN_LINKS,
+    USABLE_PROJECTION,
     projected_length,
     projection_quality,
     unconstrained_sequence,
@@ -79,13 +84,25 @@ def measure(clip, window: tuple[int, int]) -> dict | None:
     quality = projection_quality(signals, "pelvis", window=(lo, hi + 1))
     peaks = unconstrained_sequence(signals, window=(lo, hi + 1))
     order = tuple(sorted(peaks, key=lambda e: peaks[e]))
+
+    # 整段的最小值會被「動作尾端才塌」這種情況拖累，但近端節段的峰值本來就出現在
+    # 加速期前段。前後半分開看，才知道機位在**該量的地方**行不行。
+    lengths = projected_length(signals, "pelvis")
+    reference = float(lengths.max()) or 1.0
+    mid = lo + (hi - lo) // 2
+    early = float(lengths[lo : mid + 1].min()) / reference
+    late = float(lengths[mid : hi + 1].min()) / reference
+
     return {
         "min_relative": quality.min_relative,
         "collapse_position": quality.collapse_position,
         "usable": quality.usable,
+        "early_min": early,
+        "late_min": late,
+        "early_usable": early >= USABLE_PROJECTION,
         "order_ok": order == EXPECTED,
         "peak_at_collapse": abs(peaks["pelvis_peak_rotation"] - quality.collapse_frame) <= 2,
-        "profile": _profile(projected_length(signals, "pelvis"), lo, hi),
+        "profile": _profile(lengths, lo, hi),
     }
 
 
@@ -114,6 +131,9 @@ def summarise(groups: dict[str, list[dict]]) -> dict[str, dict]:
             "peak_at_collapse_rate": float(np.mean([i["peak_at_collapse"] for i in items])),
             "order_ok_rate": float(np.mean([i["order_ok"] for i in items])),
             "usable_rate": float(np.mean([i["usable"] for i in items])),
+            "median_early_min": float(np.median([i["early_min"] for i in items])),
+            "median_late_min": float(np.median([i["late_min"] for i in items])),
+            "early_usable_rate": float(np.mean([i["early_usable"] for i in items])),
         }
     return out
 
@@ -235,10 +255,11 @@ def main() -> int:
         logger.info("=== %s ===", key)
         for name, stats in results[key].items():
             logger.info(
-                "  %-28s n=%3d  最短 %.2f  塌陷位置 %.2f  峰值落在塌陷 %.0f%%  順序成立 %.0f%%",
+                "  %-28s n=%3d  全段最短 %.2f  前半 %.2f  後半 %.2f  "
+                "前半可用 %.0f%%  塌陷位置 %.2f",
                 name, stats["n"], stats["median_min_relative"],
-                stats["median_collapse_position"],
-                stats["peak_at_collapse_rate"] * 100, stats["order_ok_rate"] * 100,
+                stats["median_early_min"], stats["median_late_min"],
+                stats["early_usable_rate"] * 100, stats["median_collapse_position"],
             )
     logger.info("位移 vs 塌陷位置 r = %+.3f", results["pennaction_travel_vs_collapse_r"])
 
