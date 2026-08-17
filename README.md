@@ -204,7 +204,7 @@ python -m kinetic_chain.cli train --sport golf_swing --no-pennaction \
     --val-fold 1 --epochs 60 --output runs/golf
 
 python -m kinetic_chain.cli train --sport baseball_pitch --no-golfdb \
-    --epochs 60 --output runs/pitch
+    --epochs 80 --output runs/pitch
 
 # 評估
 python -m kinetic_chain.cli eval --checkpoint runs/golf/model.pt \
@@ -224,7 +224,7 @@ python -m kinetic_chain.cli infer \
 from kinetic_chain.infer import predict_video
 from kinetic_chain.train import load_checkpoint
 
-model = load_checkpoint("runs/joint/model.pt", device="cuda")
+model = load_checkpoint("runs/pitch/model.pt", device="cuda")
 result = predict_video(model, "pitch.mp4", "baseball_pitch", device="cuda")
 print(result.format())
 ```
@@ -235,7 +235,7 @@ print(result.format())
 pytest
 ```
 
-86 個測試，全部不需要 GPU、不需要資料集、不需要網路（模型與弱標註以合成動作驗證）。
+100 個測試，全部不需要 GPU、不需要資料集、不需要網路（模型與弱標註以合成動作驗證）。
 
 測試重點在不變式而不是分數：順序約束解碼以窮舉法比對全域最佳解；特徵的平移／縮放／
 鏡射不變性；padding 不得被選為事件；checkpoint 與運動項目註冊表不一致時必須拒絕載入。
@@ -312,6 +312,42 @@ SwingNet 的數字引自論文與作者 repo，未在本機重跑。
 四折共 1391 段 + 多運動 463 段驗證片段，順序違反數 **0**。由解碼器的 DP 轉移限制保證，
 並由單元測試以窮舉法比對全域最佳解驗證。
 
+## 棒球投球分析
+
+除了高爾夫，也做了一組棒球投球的動力鏈分析（Penn Action 155 段，弱標註）。
+完整報告見 `docs/pitch-analysis.md`；重跑：
+
+```bash
+python -m kinetic_chain.cli train --sport baseball_pitch --no-golfdb \
+    --epochs 80 --output runs/pitch
+python scripts/pitch_analysis.py --checkpoint runs/pitch/model.pt
+```
+
+**結論：分段層級可用，分離時序不可用。**
+
+階段時間量得出來（中位數，30 fps）：蓄力 400 ms / 跨步 233 ms / 加速期 633 ms /
+隨勢 700 ms，佔投球期分別是 21% / 13.5% / 34% / 42%。出手瞬間的誤差中位數 1 格。
+
+但動力鏈真正的核心指標量不出來。直接量原始訊號的峰值（**不套任何順序假設**）：
+
+| 量測範圍 | 近端→遠端序列成立率 |
+|---|---|
+| 整段片段 | 36.8% |
+| 只看加速階段 | 56.8% |
+| 隨機猜的基準 | 16.7% |
+
+明顯優於隨機，但遠不到文獻上動作捕捉量到的「近乎必然成立」。原因是**取樣率**：
+文獻的骨盆→軀幹分離約 20–50 ms，30 fps 下一格 33.3 ms，要量的量跟量測解析度同一個
+數量級。實測分布正是解析度不足的樣子——骨盆→軀幹中位數 +1 格，其中 14% 落在同一格、
+**30% 順序相反**。
+
+這不是模型的問題，換更大的模型或更多資料都沒有用；要做需要 240–300 fps 的影片。
+
+> 上面那個 56.8% 必須用無約束量測才有意義。弱標註推導骨盆／軀幹峰值時，把搜尋範圍
+> 限制在上肢峰值之前，那條路徑**必然**得出正確順序——拿它來驗證近端到遠端是循環論證。
+> `analysis.unconstrained_sequence()` 就是為了避開這件事而存在，並有專門的測試確認
+> 它會如實回報順序相反的案例。
+
 ## Project Structure
 
 ```
@@ -325,11 +361,13 @@ src/kinetic_chain/
   decode.py          順序約束 Viterbi 解碼，無參數
   metrics.py         PCE 與容忍度（沿用 GolfDB 定義）
   data.py            Clip 記錄、批次組裝、分層切分
+  analysis.py        動力鏈時序指標；含不套順序假設的無約束量測
   datasets/          GolfDB（真人）與 Penn Action（弱標註）轉接
   train.py evaluate.py infer.py cli.py
-tests/               86 個測試
+tests/               100 個測試
 docs/spec.md         需求、範圍與成功標準
 docs/architecture.md 系統、演算法與驗證設計
+docs/pitch-analysis.md 棒球投球動力鏈分析報告
 ```
 
 ## Adding a Sport
