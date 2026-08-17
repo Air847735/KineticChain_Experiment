@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kinetic-chain"
+version = "0.1.0"
+description = "Sport-conditioned detection of kinetic-chain key events in single-athlete video"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "torch>=2.0",
+]
+
+[project.optional-dependencies]
+# 姿態抽取。核心層（events/features/model/decode/metrics）不匯入這些套件。
+#
+# onnxruntime-gpu 上限 <1.21：1.21 起改為要求 CUDA 13，而本專案的 torch 走 cu124，
+# 兩者共存時 CUDA 12 的 libcublasLt.so.12 無法滿足 1.21+，CUDAExecutionProvider 會
+# 載入失敗並**靜默退回 CPU**（速度從約 330 fps 掉到約 90 fps，不會報錯）。
+#
+# rtmlib 自己相依 onnxruntime（CPU 版）與 opencv-python，兩者都會蓋掉這裡的選擇。
+# 安裝步驟見 README，必須以 --no-deps 安裝 rtmlib。
+pose = [
+    "opencv-python-headless>=4.8",
+    "onnxruntime-gpu>=1.17,<1.21",
+    "tqdm>=4.65",
+]
+# 資料集轉接。golfDB.pkl 是 pandas DataFrame 的 pickle。
+data = [
+    "pandas>=2.0",
+]
+dev = [
+    "pytest>=7.4",
+]
+
+[project.scripts]
+kinetic-chain = "kinetic_chain.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
