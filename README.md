@@ -261,6 +261,14 @@ SwingNet 的數字引自論文與作者 repo，未在本機重跑。
 （SwingNet 論文報告「八個事件中的六個達 91.8%」，困難點相同）。這兩個事件缺乏明確的
 力學界線：球員可以在動作前靜止數十影格，而容忍度只有約 2.7 影格。
 
+PCE 看不出實際誤差幾格，直接看誤差分布更清楚（第 1 折 349 段驗證片段）：
+
+![各事件的誤差分布](docs/figures/golf_accuracy.png)
+
+中段六個事件有 59–88% 落在 **1 格以內**；`address` 與 `finish` 只有 26% / 30%。
+重現：`python scripts/plot_accuracy.py --checkpoint runs/golf/model.pt --sport golf_swing
+--val-fold 1 --output docs/figures/golf_accuracy.png`
+
 ### 多運動（單一 checkpoint，1856 段訓練 / 463 段驗證）
 
 | 分組 | PCE | 片段數 |
@@ -328,6 +336,11 @@ python scripts/pitch_analysis.py --checkpoint runs/pitch/model.pt
 階段時間量得出來（中位數，30 fps）：蓄力 400 ms / 跨步 233 ms / 加速期 633 ms /
 隨勢 700 ms，佔投球期分別是 21% / 13.5% / 34% / 42%。出手瞬間的誤差中位數 1 格。
 
+![投球事件的時間分布](docs/figures/chain_timeline.png)
+
+出手、上肢峰值、軀幹峰值三個箱子都很窄；**骨盆峰值的箱子橫跨了三分之一個投球期**
+（IQR 53–89%）——同一個力學事件不該有這種離散度，這是第一個警訊。
+
 但動力鏈真正的核心指標量不出來。直接量原始訊號的峰值（**不套任何順序假設**）：
 
 | 量測範圍 | 近端→遠端序列成立率 |
@@ -344,9 +357,18 @@ python scripts/pitch_analysis.py --checkpoint runs/pitch/model.pt
 落在 0.0–0.2 的那些格，有 69.5% 的角速度超過該片段峰值的一半；長度正常時只有 1.4%。
 骨盆角速度峰值那一格的髖線長度中位數只剩片段中位數的 **23%**。
 
+![髖線投影長度與骨盆角速度的劑量反應](docs/figures/projection_artifact.png)
+
 **「骨盆峰值旋轉」偵測器實際上是「髖線投影縮短」偵測器。** 取樣率是次要限制——
 即使修好假影，30 fps 仍不足以解析 20–50 ms 的分離時間，但順序要顛倒過來：先修假影，
 再談幀率。修正方向與影響範圍見 `docs/pitch-analysis.md`。
+
+單次投球的三條速度曲線最能看出問題：
+
+![單次投球的動力鏈曲線](docs/figures/chain_trace_penn_action_0045.png)
+
+軀幹與手腕在**同一格**達峰（1 格 = 33 ms，分不出先後）；骨盆的「峰值」落在**出手之後**，
+在真正的加速階段裡骨盆只有自己最大值的 0.22。
 
 > 上面那個 56.8% 必須用無約束量測才有意義。弱標註推導骨盆／軀幹峰值時，把搜尋範圍
 > 限制在上肢峰值之前，那條路徑**必然**得出正確順序——拿它來驗證近端到遠端是循環論證。
@@ -369,6 +391,8 @@ src/kinetic_chain/
   analysis.py        動力鏈時序指標；含不套順序假設的無約束量測
   datasets/          GolfDB（真人）與 Penn Action（弱標註）轉接
   train.py evaluate.py infer.py cli.py
+scripts/             實驗、視覺化與繪圖（輸出不含人物影像）
+docs/figures/        README 與報告用的圖，皆為圖表，無人物影像
 tests/               100 個測試
 docs/spec.md         需求、範圍與成功標準
 docs/architecture.md 系統、演算法與驗證設計
