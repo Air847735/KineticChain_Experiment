@@ -11,8 +11,11 @@ import pytest
 
 from kinetic_chain.analysis import (
     CHAIN_LINKS,
+    ROTATION_SEGMENTS,
     SEGMENTS,
     analyse,
+    projected_length,
+    projection_quality,
     sequence_rate,
     summarise,
     unconstrained_sequence,
@@ -183,3 +186,79 @@ def test_chain_links_are_ordered_proximal_to_distal():
         for e in CANONICAL_EVENTS
         if e in {name for name, _ in CHAIN_LINKS}
     ]
+
+
+# --------------------------------------------------------------------------
+# 投影品質診斷
+# --------------------------------------------------------------------------
+
+
+def _with_hip_width(widths: np.ndarray):
+    """造一個髖線寬度依指定序列變化的 PoseSignals。"""
+    from kinetic_chain.skeleton import JOINT_INDEX
+
+    signals = compute(synthetic_pose(len(widths)), 30.0)
+    pose = np.array(signals.pose, copy=True)
+    left, right = JOINT_INDEX["left_hip"], JOINT_INDEX["right_hip"]
+    pose[:, left, 0] = -widths / 2
+    pose[:, right, 0] = widths / 2
+    pose[:, [left, right], 1] = 0.0
+    object.__setattr__(signals, "pose", pose)
+    return signals
+
+
+def test_projected_length_tracks_the_segment_width():
+    widths = np.array([1.0] * 20 + [0.2] * 10 + [1.0] * 20)
+    lengths = projected_length(_with_hip_width(widths), "pelvis")
+    assert lengths[:20] == pytest.approx(1.0)
+    assert lengths[20:30] == pytest.approx(0.2)
+
+
+def test_projection_quality_flags_a_collapsing_view():
+    widths = np.concatenate([np.ones(20), np.full(10, 0.05), np.ones(20)])
+    quality = projection_quality(_with_hip_width(widths), "pelvis")
+    assert not quality.usable
+    assert quality.min_relative == pytest.approx(0.05, abs=1e-6)
+    assert 20 <= quality.collapse_frame < 30
+
+
+def test_projection_quality_accepts_a_stable_view():
+    widths = np.full(50, 0.9)
+    widths[25] = 0.85
+    quality = projection_quality(_with_hip_width(widths), "pelvis")
+    assert quality.usable
+    assert quality.min_relative > 0.9
+
+
+def test_collapse_position_is_relative_to_the_given_window():
+    """同一個塌陷，落在動作中段還是動作之外，嚴重程度完全不同。"""
+    widths = np.ones(100)
+    widths[80] = 0.05
+    signals = _with_hip_width(widths)
+
+    whole = projection_quality(signals, "pelvis")
+    assert whole.collapse_position == pytest.approx(80 / 99, abs=0.02)
+
+    # 只看 60-100 的區間時，同一格落在區間中段
+    windowed = projection_quality(signals, "pelvis", window=(60, 101))
+    assert windowed.collapse_frame == 80
+    assert windowed.collapse_position == pytest.approx(0.5, abs=0.02)
+
+
+def test_projection_quality_window_is_clamped():
+    quality = projection_quality(_with_hip_width(np.ones(40)), "pelvis", window=(-10, 9999))
+    assert 0 <= quality.collapse_frame < 40
+    assert 0.0 <= quality.collapse_position <= 1.0
+
+
+def test_unknown_segment_is_rejected():
+    with pytest.raises(ValueError):
+        projected_length(_with_hip_width(np.ones(30)), "knee")
+
+
+def test_rotation_segments_cover_the_signals_that_use_angles():
+    """凡是由方向角微分而來的訊號，都必須有對應的投影品質診斷。"""
+    angle_based = {"pelvis_peak_rotation": "pelvis", "torso_peak_rotation": "torso"}
+    for event, _ in CHAIN_LINKS:
+        if event in angle_based:
+            assert angle_based[event] in ROTATION_SEGMENTS

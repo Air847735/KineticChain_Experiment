@@ -23,6 +23,7 @@ import numpy as np
 
 from .events import CANONICAL_EVENTS, SportSpec
 from .features import PoseSignals
+from .skeleton import JOINT_INDEX
 
 #: 動力鏈上依序傳遞的三個環節，近端到遠端。
 CHAIN_LINKS: tuple[tuple[str, str], ...] = (
@@ -161,6 +162,94 @@ def analyse(
         sequence_ok=observed == tuple(links),
         throw_frames=int(span),
         timeline=timeline,
+    )
+
+
+#: 旋轉量測所依賴的 2D 連線。方向角就是由這兩點的連線算出來的。
+ROTATION_SEGMENTS: dict[str, tuple[str, str]] = {
+    "pelvis": ("left_hip", "right_hip"),
+    "torso": ("left_shoulder", "right_shoulder"),
+}
+
+#: 投影長度低於自身最大值的這個比例時，方向角已不可信。
+#: 依據：1 像素的關鍵點誤差造成的角度偏移約為 ``1 / 投影長度``；髖線在實測資料中
+#: 中位長度約 27 px，掉到 3 px 時 1 px 抖動就會偽造出 550 °/s，與投球的真實峰值同量級。
+USABLE_PROJECTION = 0.5
+
+
+@dataclass(frozen=True)
+class ProjectionQuality:
+    """某個節段的連線在這支影片裡投影得夠不夠長。
+
+    骨盆與軀幹的「角速度」是由連線方向角微分而來，而這條連線在 2D 投影下會隨身體
+    轉向鏡頭而縮短。長度趨近零時 ``atan2`` 是病態的——輸入的小誤差被放大成輸出的
+    大誤差。這個類別回答的是「這支影片的機位，適不適合量這個節段的旋轉」。
+
+    Attributes
+    ----------
+    min_relative:
+        區間內最短的投影長度，除以整段影片的最長投影長度。1.0 表示完全沒縮短。
+    collapse_frame:
+        投影最短的影格。
+    collapse_position:
+        該影格在給定區間中的相對位置，0 = 區間起點、1 = 區間終點。
+        塌陷落在動作的關鍵段裡，比塌陷本身更糟。
+    usable:
+        ``min_relative >= threshold``。為假時，該節段的旋轉量測不應採信。
+    """
+
+    segment: str
+    min_relative: float
+    collapse_frame: int
+    collapse_position: float
+    usable: bool
+
+
+def projected_length(signals: PoseSignals, segment: str = "pelvis") -> np.ndarray:
+    """節段連線的逐影格投影長度（身體尺度為單位）。"""
+    try:
+        first, second = ROTATION_SEGMENTS[segment]
+    except KeyError as exc:
+        raise ValueError(
+            f"未知的節段 {segment!r}；可用的有 {sorted(ROTATION_SEGMENTS)}"
+        ) from exc
+    pose = signals.pose
+    a = pose[:, JOINT_INDEX[first], :2]
+    b = pose[:, JOINT_INDEX[second], :2]
+    return np.linalg.norm(b - a, axis=1)
+
+
+def projection_quality(
+    signals: PoseSignals,
+    segment: str = "pelvis",
+    *,
+    window: tuple[int, int] | None = None,
+    threshold: float = USABLE_PROJECTION,
+) -> ProjectionQuality:
+    """判斷機位適不適合量這個節段的旋轉。
+
+    ``window`` 給定要分析的區間（例如前腳著地 → 出手）。塌陷位置是相對於這個區間
+    計算的，因為「塌在動作中段」和「塌在動作開始前」的嚴重程度完全不同。
+
+    這是**診斷**，不改變任何訊號。要不要據此排除資料由呼叫端決定。
+    """
+    lengths = projected_length(signals, segment)
+    reference = float(lengths.max())
+    lo, hi = (0, lengths.size) if window is None else window
+    lo = max(0, min(lo, lengths.size - 1))
+    hi = max(lo + 1, min(hi, lengths.size))
+
+    segment_lengths = lengths[lo:hi]
+    at = lo + int(segment_lengths.argmin())
+    span = max(hi - 1 - lo, 1)
+    minimum = float(segment_lengths.min()) / reference if reference > 0 else 0.0
+
+    return ProjectionQuality(
+        segment=segment,
+        min_relative=minimum,
+        collapse_frame=at,
+        collapse_position=(at - lo) / span,
+        usable=minimum >= threshold,
     )
 
 

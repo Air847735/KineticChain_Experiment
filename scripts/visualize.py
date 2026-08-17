@@ -5,6 +5,10 @@
 還是「整個抓錯位置」。
 
     python scripts/visualize.py --checkpoint runs/golf/model.pt --val-fold 1 --count 4
+    python scripts/visualize.py --checkpoint runs/pitch/model.pt \\
+        --sport baseball_pitch --count 3
+
+輸出含可辨識的運動員影像，**不進版控**（`runs/` 已在 .gitignore）。
 """
 
 from __future__ import annotations
@@ -34,13 +38,28 @@ MISS = (110, 110, 245)
 BACKGROUND = (24, 24, 24)
 
 
-def read_frames(video: Path, indices: list[int]) -> dict[int, np.ndarray]:
-    """只取需要的影格。逐格讀比 seek 可靠——短片段的關鍵格常落在關鍵影格之間。"""
+def read_frames(source: Path, indices: list[int]) -> dict[int, np.ndarray]:
+    """取出指定影格。
+
+    ``source`` 可以是影片檔（GolfDB 的 mp4）或影格目錄（Penn Action 的 jpg 序列）。
+    影片一律逐格讀而不 seek——短片段的關鍵格常落在關鍵影格之間，seek 會跳到最近的
+    關鍵影格而悄悄取錯格。
+    """
     import cv2
 
+    if source.is_dir():
+        files = sorted(source.glob("*.jpg"))
+        frames = {}
+        for index in indices:
+            if 0 <= index < len(files):
+                image = cv2.imread(str(files[index]))
+                if image is not None:
+                    frames[index] = image
+        return frames
+
     wanted = set(indices)
-    capture = cv2.VideoCapture(str(video))
-    frames: dict[int, np.ndarray] = {}
+    capture = cv2.VideoCapture(str(source))
+    frames = {}
     position = 0
     try:
         while wanted:
@@ -77,8 +96,13 @@ def build_sheet(
     predicted: dict[str, int],
     truth: dict[str, int] | None,
     tol: int,
+    reference_label: str = "true",
 ) -> np.ndarray:
-    """一列預測、（有真值時）一列真值，欄位對齊同一個事件。"""
+    """一列預測、一列參照，欄位對齊同一個事件。
+
+    ``reference_label`` 讓呼叫端標明第二列是什麼：GolfDB 是人工標註（``true``），
+    Penn Action 是規則推導的弱標註（``rule``）。兩者不是同一種東西，圖上必須分得出來。
+    """
     import cv2
 
     rows = 2 if truth else 1
@@ -102,13 +126,16 @@ def build_sheet(
         assert source is not None
         y = LABEL_HEIGHT + row * (TILE + LABEL_HEIGHT)
         cv2.putText(
-            sheet, "pred" if row == 0 else "true", (6, y + TILE // 2),
+            sheet, "pred" if row == 0 else reference_label, (6, y + TILE // 2),
             cv2.FONT_HERSHEY_SIMPLEX, 0.45, GREY, 1, cv2.LINE_AA,
         )
         for column, event in enumerate(events):
             x = ROW_LABEL_WIDTH + column * TILE
             frame = frames.get(source[event])
-            sheet[y : y + TILE, x : x + TILE] = blank if frame is None else frame
+            if frame is None:
+                sheet[y : y + TILE, x : x + TILE] = blank
+            else:
+                sheet[y : y + TILE, x : x + TILE] = cv2.resize(frame, (TILE, TILE))
 
             caption = f"f{source[event]}"
             colour = WHITE
@@ -131,7 +158,10 @@ def main() -> int:
     parser.add_argument("--golfdb-annotations", type=Path, default=Path("data/raw/golfDB.pkl"))
     parser.add_argument("--golfdb-cache", type=Path, default=Path("data/cache/golfdb_pose"))
     parser.add_argument("--golfdb-videos", type=Path, default=Path("data/raw/videos_160"))
+    parser.add_argument("--pennaction-root", type=Path, default=Path("data/raw/Penn_Action"))
+    parser.add_argument("--sport", default="golf_swing")
     parser.add_argument("--val-fold", type=int, default=1)
+    parser.add_argument("--val-fraction", type=float, default=0.2)
     parser.add_argument("--count", type=int, default=4)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--output-dir", type=Path, default=Path("runs/visualise"))
@@ -139,12 +169,24 @@ def main() -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
-    from kinetic_chain.datasets import golfdb
+    if args.sport == "golf_swing":
+        from kinetic_chain.datasets import golfdb
 
-    clips = golfdb.load(args.golfdb_annotations, args.golfdb_cache)
-    _, val_clips = split_clips(clips, val_fold=args.val_fold)
+        clips = golfdb.load(args.golfdb_annotations, args.golfdb_cache)
+        _, val_clips = split_clips(clips, val_fold=args.val_fold)
+        media_for = lambda cid: args.golfdb_videos / f"{cid}.mp4"  # noqa: E731
+        reference_label = "true"
+    else:
+        from kinetic_chain.datasets import pennaction
+
+        clips = pennaction.load(args.pennaction_root, sports=[args.sport])
+        _, val_clips = split_clips(clips, val_fraction=args.val_fraction, seed=0)
+        media_for = lambda cid: args.pennaction_root / "frames" / cid  # noqa: E731
+        # Penn Action 的第二列是規則推導的弱標註，不是人工標註，標籤必須不同
+        reference_label = "rule"
+
     if not val_clips:
-        raise SystemExit(f"第 {args.val_fold} 折沒有驗證片段")
+        raise SystemExit(f"{args.sport} 沒有驗證片段")
 
     model = load_checkpoint(args.checkpoint, device=args.device)
     predictions = predict_clips(model, val_clips, device=args.device)
@@ -159,27 +201,32 @@ def main() -> int:
         scored.append((hits / len(clip.ordered_events), clip, prediction, tol))
     scored.sort(key=lambda row: row[0], reverse=True)
 
-    picks = []
+    # 先取最好、最差、中位，其餘依序遞補——並非每個片段都有影像來源
+    # （Penn Action 的 frames/ 通常只解壓一部分），缺的要能跳過而不是就此空手。
     n = len(scored)
-    for label, index in (
-        ("best", 0),
-        ("median", n // 2),
-        ("worst", n - 1),
-    ):
-        picks.append((label, *scored[index]))
-    for offset in range(1, max(args.count - 3, 0) + 1):
-        picks.append(("median", *scored[min(n // 2 + offset, n - 1)]))
+    priority = [0, n - 1, n // 2]
+    order = priority + [i for i in range(n) if i not in priority]
+
+    def label_for(index: int) -> str:
+        return "best" if index == 0 else "worst" if index == n - 1 else "median"
+
+    picks = [(label_for(i), *scored[i]) for i in order]
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    for label, score, clip, prediction, tol in picks[: args.count]:
+    written = 0
+    for label, score, clip, prediction, tol in picks:
+        if written >= args.count:
+            break
         clip_number = clip.clip_id.split("/")[-1]
-        video = args.golfdb_videos / f"{clip_number}.mp4"
-        if not video.is_file():
-            logger.warning("找不到影片 %s", video)
+        media = media_for(clip_number)
+        if not media.exists():
+            logger.warning("找不到影像來源 %s，略過", media)
             continue
         sheet = build_sheet(
-            video, list(clip.ordered_events), prediction, clip.events, tol
+            media, list(clip.ordered_events), prediction, clip.events, tol,
+            reference_label=reference_label,
         )
+        written += 1
         path = args.output_dir / f"{label}_{clip_number}.png"
         cv2.imwrite(str(path), sheet)
         logger.info(
