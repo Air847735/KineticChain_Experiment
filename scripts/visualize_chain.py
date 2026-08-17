@@ -26,7 +26,11 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-from kinetic_chain.analysis import CHAIN_LINKS, unconstrained_sequence  # noqa: E402
+from kinetic_chain.analysis import (  # noqa: E402
+    CHAIN_LINKS,
+    EXTENSION_CHAIN_LINKS,
+    unconstrained_sequence,
+)
 from kinetic_chain.data import split_clips  # noqa: E402
 from kinetic_chain.evaluate import predict_clips  # noqa: E402
 from kinetic_chain.events import get_sport  # noqa: E402
@@ -37,11 +41,21 @@ logger = logging.getLogger("visualize_chain")
 INK = "#15181B"
 MUTED = "#5C666D"
 LINE = "#DCE0E3"
-LINKS = {
+ROTATION_LABELS = {
     "pelvis_peak_rotation": ("Pelvis", "#2F6F9F"),
     "torso_peak_rotation": ("Torso", "#B0762A"),
     "arm_peak_velocity": ("Arm / wrist", "#A63A46"),
 }
+EXTENSION_LABELS = {
+    "hip_extension_peak": ("Hip extension", "#2F6F9F"),
+    "knee_extension_peak": ("Knee extension", "#B0762A"),
+    "arm_peak_velocity": ("Arm / wrist", "#A63A46"),
+}
+CHAINS = {
+    "rotation": (CHAIN_LINKS, ROTATION_LABELS),
+    "extension": (EXTENSION_CHAIN_LINKS, EXTENSION_LABELS),
+}
+LINKS = ROTATION_LABELS
 SIGNAL_OF = dict(CHAIN_LINKS)
 
 
@@ -56,8 +70,13 @@ def _style(ax) -> None:
     ax.set_axisbelow(True)
 
 
-def trace_figure(clip, events: dict[str, int], path: Path) -> None:
+def trace_figure(clip, events: dict[str, int], path: Path,
+                 chain: str = "rotation",
+                 window_events: tuple[str, str] = ("stride_foot_contact", "release_impact"),
+                 window_label: str = "Acceleration phase") -> None:
     """單次動作：三條速度曲線疊在一起，峰值標出來。"""
+    links, labels = CHAINS[chain]
+    signal_of = dict(links)
     signals = clip.signals().signals
     n = clip.num_frames
     frames = np.arange(n)
@@ -65,15 +84,17 @@ def trace_figure(clip, events: dict[str, int], path: Path) -> None:
     fig, ax = plt.subplots(figsize=(9.5, 4.0), dpi=170)
     _style(ax)
 
-    lo = events.get("stride_foot_contact")
-    hi = events.get("release_impact")
+    lo = events.get(window_events[0])
+    hi = events.get(window_events[1])
     if lo is not None and hi is not None and hi > lo:
-        ax.axvspan(lo, hi, color="#F0D9A8", alpha=0.35, zorder=0,
-                   label="Acceleration phase")
+        ax.axvspan(lo, hi, color="#F0D9A8", alpha=0.35, zorder=0, label=window_label)
 
-    peaks = unconstrained_sequence(clip.signals())
-    for event, (label, colour) in LINKS.items():
-        values = np.asarray(signals[SIGNAL_OF[event]], dtype=float)[:n]
+    peaks = unconstrained_sequence(
+        clip.signals(), links=links,
+        window=(lo, hi + 1) if lo is not None and hi is not None and hi > lo else None,
+    )
+    for event, (label, colour) in labels.items():
+        values = np.asarray(signals[signal_of[event]], dtype=float)[:n]
         peak = values.max()
         if peak > 0:
             values = values / peak
@@ -84,8 +105,8 @@ def trace_figure(clip, events: dict[str, int], path: Path) -> None:
         ax.annotate(f"f{at}", (at, values[at]), textcoords="offset points",
                     xytext=(0, 9), ha="center", fontsize=8.5, color=colour)
 
-    order = " > ".join(LINKS[e][0] for e in sorted(peaks, key=lambda e: peaks[e]))
-    expected = tuple(name for name, _ in CHAIN_LINKS)
+    order = " > ".join(labels[e][0] for e in sorted(peaks, key=lambda e: peaks[e]))
+    expected = tuple(name for name, _ in links)
     ok = tuple(sorted(peaks, key=lambda e: peaks[e])) == expected
 
     ax.set_xlabel("frame", color=MUTED, fontsize=9.5)

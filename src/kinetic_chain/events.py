@@ -67,10 +67,21 @@ UNIVERSAL_ORDER: tuple[tuple[str, str], ...] = (
 )
 
 #: 單一運動專屬的節點。命名一律以運動 id 為前綴，避免誤以為可跨運動共用。
+#:
+#: 舉重的節點幾乎全在這裡，而不是 canonical——這是實測結果，不是偷懶：
+#: canonical 詞彙是從投擲／擊球這類**旋轉型**動作歸納出來的，換到**伸展型**的
+#: 舉重就只有 ``address`` / ``arm_peak_velocity`` / ``finish`` 三個對得上。
+#: 詳見 `docs/architecture.md` 的「Canonical 詞彙的適用邊界」。
 SPORT_SPECIFIC_EVENTS: tuple[str, ...] = (
     "golf_toe_up",          # 上桿至桿身水平（桿頭朝上）
     "golf_mid_backswing",   # 上桿至前臂水平
     "golf_mid_downswing",   # 下桿至前臂水平
+    "clean_liftoff",        # 槓鈴離地
+    "clean_knee_pass",      # 槓鈴通過膝蓋（第一拉結束）
+    "clean_catch",          # 接槓於肩，蹲至最低
+    "clean_recovery",       # 由蹲站起
+    "clean_jerk_dip",       # 上挺前的預蹲最低點
+    "clean_overhead",       # 槓鈴到達最高點（挺舉鎖定）
 )
 
 #: 模型輸出頭涵蓋的完整事件槽，順序即輸出索引。
@@ -193,6 +204,51 @@ class SportSpec:
 def _peak(event: str, signal: str, **params: object) -> WeakRule:
     return WeakRule(event, "signal_peak", {"signal": signal, **params})
 
+
+#: 舉重（挺舉）的分期依 IWF 與生物力學文獻：
+#: 起始 → 第一拉（離地至膝）→ 過渡（雙膝彎曲）→ 第二拉（三重伸展）→
+#: 接槓 → 站起 → 上挺預蹲 → 上挺發力 → 過頭鎖定。
+#: 這裡量得到的是其中有 2D 姿態對應的節點；槓鈴本身沒有關鍵點，以手腕代理。
+_LIFT_RULES: tuple[WeakRule, ...] = (
+    WeakRule("address", "rest_start"),
+    # 過頭最高點：全片段手腕最高，是整個動作最不會誤判的錨點，先定它
+    WeakRule("clean_overhead", "signal_extreme", {"signal": "wrist_height", "mode": "max"}),
+    # 接槓：骨盆下沉最多的一刻。踝高是相對骨盆的，蹲得越低這個值越大
+    WeakRule(
+        "clean_catch",
+        "signal_extreme",
+        {"signal": "lead_ankle_height", "mode": "max", "before": "clean_overhead"},
+    ),
+    WeakRule(
+        "arm_peak_velocity",
+        "signal_peak",
+        {"signal": "wrist_speed", "after": "clean_catch", "before": "clean_overhead"},
+    ),
+    WeakRule(
+        "clean_recovery",
+        "signal_extreme",
+        {"signal": "lead_ankle_height", "mode": "min",
+         "after": "clean_catch", "before": "arm_peak_velocity"},
+    ),
+    WeakRule(
+        "clean_jerk_dip",
+        "signal_extreme",
+        {"signal": "lead_ankle_height", "mode": "max",
+         "after": "clean_recovery", "before": "arm_peak_velocity"},
+    ),
+    WeakRule(
+        "clean_liftoff",
+        "signal_onset",
+        {"signal": "wrist_height", "after": "address", "before": "clean_catch"},
+    ),
+    WeakRule(
+        "clean_knee_pass",
+        "signal_crossing",
+        {"signal": "wrist_height", "reference": "lead_knee_height",
+         "after": "clean_liftoff", "before": "clean_catch"},
+    ),
+    WeakRule("finish", "rest_end"),
+)
 
 #: 投擲／擊球類共通的近端到遠端規則。
 #:
@@ -511,6 +567,29 @@ register_sport(
             ),
             WeakRule("finish", "rest_end"),
         ),
+    )
+)
+
+register_sport(
+    SportSpec(
+        sport_id="clean_and_jerk",
+        display_name="舉重挺舉",
+        # 只有頭尾與上肢峰值三個是 canonical；其餘全是專屬節點。
+        # 動力鏈本身也不同：舉重是髖→膝的伸展序列，不是骨盆→軀幹的旋轉序列。
+        events=(
+            "address",
+            "clean_liftoff",
+            "clean_knee_pass",
+            "clean_catch",
+            "clean_recovery",
+            "clean_jerk_dip",
+            "arm_peak_velocity",
+            "clean_overhead",
+            "finish",
+        ),
+        # 對稱動作，沒有慣用邊可言；鏡射只會製造不必要的變異
+        handedness_sensitive=False,
+        weak_rules=_LIFT_RULES,
     )
 )
 

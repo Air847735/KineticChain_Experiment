@@ -51,6 +51,7 @@ ACTION_TO_SPORT: dict[str, str] = {
     "tennis_serve": "tennis_serve",
     "tennis_forehand": "tennis_forehand",
     "bowl": "bowling",
+    "clean_and_jerk": "clean_and_jerk",
 }
 
 

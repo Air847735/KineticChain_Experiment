@@ -147,7 +147,27 @@ Canonical（跨運動共用輸出槽，力學定義相同）：
 Sport-specific（單一運動專屬，不遷移）：`golf_toe_up`, `golf_mid_backswing`,
 `golf_mid_downswing`。
 
-模型輸出頭大小 $E = 10 + 3 = 13$，所有運動共用。
+模型輸出頭大小 $E = 10 + 9 = 19$，所有運動共用（3 個高爾夫專屬 + 6 個舉重專屬）。
+
+#### Canonical 詞彙的適用邊界
+
+canonical 事件是從**投擲／擊球**歸納出來的，換到別類動作不一定適用。實測：
+
+| 運動 | 事件數 | 用到的 canonical |
+|---|---|---|
+| `baseball_pitch`、`bowling` | 10 | 10 |
+| `baseball_swing`、`tennis_serve`、`tennis_forehand` | 9 | 9 |
+| `golf_swing` | 11 | 8 |
+| **`clean_and_jerk`** | 9 | **3** |
+
+舉重掉到 3 個，因為 `stride_foot_contact`、`pelvis_peak_rotation`、
+`torso_peak_rotation`、`release_impact` 都預設了「單側、旋轉、有釋放物」的動作結構；
+舉重是雙側、伸展、沒有釋放。
+
+這不算違反 S3——新增舉重沒有改 `model.py`、`train.py` 或 `decode.py`——但它劃出了
+共用詞彙的價值邊界：**canonical 事件槽只在同一類動作之間有共用意義。**
+舉重與投球真正共用的力學節點只有 `arm_peak_velocity` 一個
+（`address` 與 `finish` 是通用的靜止判定）。詳見 `docs/lift-analysis.md`。
 
 #### 事件順序不是跨運動的不變式
 
@@ -200,8 +220,8 @@ features (B, T, F)
 選擇 TCN 而非 Transformer 的理由見 Design Decisions。FiLM 條件讓運動項目影響**每一層**的
 特徵轉換，而不只是拼接在輸入上；後者在深層網路中容易被忽略。
 
-參數量 553,421（實測）。雙向感受野 505 影格，覆蓋典型片段（GolfDB 長度中位數 282 影格）
-的全長，模型看得到動作的兩端。
+參數量 554,739（實測）。雙向感受野 505 影格，覆蓋典型片段（GolfDB 長度中位數 282 影格）
+的全長，模型看得到動作的兩端。輸入 58 維特徵，輸出 19 個事件槽。
 
 ### 訓練目標
 
@@ -332,10 +352,17 @@ python scripts/data_efficiency.py --output runs/data_efficiency.json
 |---|---|---|
 | SwingNet（論文，RGB + 增強） | 0.761 | 未報告 |
 | SwingNet（作者 repo，RGB 無增強） | 0.715 | 未報告 |
-| **本專案 golf_only**（單運動訓練，預設用法） | **0.7869** | 0.0045 |
-| 本專案 finetune_from_others（五運動預訓練後微調） | 0.7894 | 0.0023 |
-| 本專案 joint_no_penn_golf（聯合訓練，不含 Penn 高爾夫） | 0.7810 | 0.0058 |
-| 本專案 joint（聯合訓練，六運動全含） | 0.7711 | 0.0054 |
+| **本專案 golf_only**（單運動訓練，預設用法） | **0.7860** | 0.0061 |
+| 本專案 joint_no_penn_golf（聯合訓練，不含 Penn 高爾夫） | 0.7794 | 0.0013 |
+| 本專案 joint（聯合訓練，七運動全含） | 0.7778 | 0.0059 |
+
+> 2026-08-17 重跑。此前的數字是 0.7869 / 0.7810 / 0.7711，在
+> **加入關節夾角特徵（54 → 58 維）、加入舉重（事件槽 13 → 19）、
+> 並收緊弱標註的合格條件**之後重新訓練。高爾夫幾乎沒變（0.7869 → 0.7860），
+> 這正是要的對照——schema 改動沒有破壞既有結果。S4 的結論不變，差距由
+> 1.6 個百分點縮小到 0.8。
+>
+> `finetune_from_others` 這次沒重跑，S6 的結論（微調無效益）沿用舊 schema 的結果。
 
 **這不是嚴格對照。** 相同的是資料集、切分協定與指標定義；不同的是輸入模態
 （本專案吃 2D 姿態，SwingNet 吃 RGB）與模型（553K 參數的 TCN vs MobileNetV2+BiLSTM）。
@@ -470,6 +497,9 @@ SwingNet 的數字取自論文與作者 repo，未在本機重跑。
 | S4 對照與隔離實驗 | 已執行，S4 未達成 |
 | S6 微調 vs 從頭訓練（六個資料量 × 四折） | 已執行，S6 未達成 |
 | 棒球投球動力鏈時序分析 | 已執行，見 `docs/pitch-analysis.md` |
+| 投球事件定義對照文獻查證 | 已執行，缺 MER／MIR 兩個節點，見 `docs/pitch-analysis.md` |
+| 舉重（伸展型動力鏈）分析 | 已執行，見 `docs/lift-analysis.md` |
+| 各運動的資料／權重／實驗對照 | 已整理，見 `docs/data-map.md` |
 | 順序不變式 | 已執行，違反數 0 |
 | 端到端影片推論 | 已執行（`videos_160/7.mp4`），但該片段在訓練集內，只證明管線可用，不證明泛化 |
 | 弱標註品質的人工抽檢 | **未執行**——需要人工逐段檢視 Penn Action 的事件時間點，本次未做 |

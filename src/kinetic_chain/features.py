@@ -84,6 +84,10 @@ FEATURE_NAMES: tuple[str, ...] = (
     "lead_ankle_height",
     "lead_ankle_vspeed",
     "body_speed",
+    "cos_hip_angle",
+    "cos_knee_angle",
+    "hip_extension_speed",
+    "knee_extension_speed",
     "pose_confidence",
 )
 
@@ -225,9 +229,31 @@ def normalize(
 
 
 def _angle_series(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """向量 ``b - a`` 的方向角，沿時間軸解纏繞。"""
+    """向量 ``b - a`` 的方向角，沿時間軸解纏繞。
+
+    警告：這個量在 ``b - a`` 的投影長度趨近零時是病態的——輸入的小誤差被放大成
+    輸出的大誤差。髖線與肩線在 2D 投影下會隨身體轉向鏡頭而縮短，因此由此導出的
+    角速度不可全信。用 :func:`kinetic_chain.analysis.projection_quality` 診斷。
+    """
     d = b - a
     return np.unwrap(np.arctan2(d[:, 1], d[:, 0]))
+
+
+def _joint_angle(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> np.ndarray:
+    """以 ``b`` 為頂點的三點夾角（弧度，範圍 ``[0, pi]``）。
+
+    與 :func:`_angle_series` 的關鍵差別：夾角的兩條邊是**長節段**（軀幹、大腿、小腿），
+    不會像跨身體的髖線那樣在投影下塌成一點，因此對關鍵點雜訊穩健得多。
+    伸展型動作（舉重、跳躍）的動力鏈就定義在這種夾角上。
+
+    但它有另一個限制：三點必須落在**看得見的平面**上。正面拍攝時前後彎曲被壓縮，
+    髖角量不出來——這是矢狀面版本的同一個投影問題。
+    """
+    u = a - b
+    v = c - b
+    norms = np.linalg.norm(u, axis=-1) * np.linalg.norm(v, axis=-1)
+    cosine = (u * v).sum(axis=-1) / np.maximum(norms, 1e-9)
+    return np.arccos(np.clip(cosine, -1.0, 1.0))
 
 
 def compute(
@@ -274,7 +300,22 @@ def compute(
     lead_knee = _L_KNEE if smoothed[:, _L_KNEE, 0].mean() > smoothed[:, _R_KNEE, 0].mean() else _R_KNEE
     lead_ankle = _L_ANKLE if smoothed[:, _L_ANKLE, 0].mean() > smoothed[:, _R_ANKLE, 0].mean() else _R_ANKLE
 
+    # 伸展型動力鏈：以三點夾角量髖與膝，取雙側平均（舉重等對稱動作最適用；
+    # 非對稱動作取平均仍有意義，但不區分前後腳）。
+    shoulder_mid = 0.5 * (smoothed[:, _L_SHOULDER, :] + smoothed[:, _R_SHOULDER, :])
+    pelvis_origin = np.zeros_like(shoulder_mid)
+    knee_mid = 0.5 * (smoothed[:, _L_KNEE, :] + smoothed[:, _R_KNEE, :])
+    ankle_mid = 0.5 * (smoothed[:, _L_ANKLE, :] + smoothed[:, _R_ANKLE, :])
+    hip_angle = _joint_angle(shoulder_mid, pelvis_origin, knee_mid)
+    knee_angle = _joint_angle(pelvis_origin, knee_mid, ankle_mid)
+
     signals: dict[str, np.ndarray] = {
+        "hip_angle": hip_angle,
+        "knee_angle": knee_angle,
+        # 只取**伸展**方向（夾角變大）。用絕對值會把接槓下蹲的快速屈曲算進來，
+        # 而那正好是三重伸展的反向動作，混在一起會讓序列量測完全失真。
+        "hip_extension_speed": np.maximum(_velocity(hip_angle, fps), 0.0),
+        "knee_extension_speed": np.maximum(_velocity(knee_angle, fps), 0.0),
         "pelvis_angle": pelvis_angle,
         "torso_angle": torso_angle,
         "separation_angle": separation,
@@ -345,6 +386,10 @@ def build(
                 s["lead_ankle_height"],
                 s["lead_ankle_vspeed"],
                 s["body_speed"],
+                np.cos(s["hip_angle"]),
+                np.cos(s["knee_angle"]),
+                s["hip_extension_speed"],
+                s["knee_extension_speed"],
                 conf,
             ],
             axis=1,

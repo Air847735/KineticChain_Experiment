@@ -31,6 +31,14 @@ ONSET_FRACTION = 0.10
 #: ``foot_contact`` 判定「已著地」的門檻，佔踝高度全距的比例。
 CONTACT_FRACTION = 0.15
 
+#: 允許擠在同一影格的事件數上限。
+#:
+#: **三路平手是取樣率的極限，不是規則失敗**：動力鏈的骨盆／軀幹／上肢峰值在
+#: 30 fps 下本來就相隔不到一格（見 `docs/pitch-analysis.md`），實測每個運動都有
+#: 三分之一左右的片段如此。門檻設 2 會砍掉一半資料而且砍錯對象。
+#: 四路以上才是搜尋窗互相塌陷的徵兆。
+MAX_TIED_EVENTS = 3
+
 Resolver = Callable[[PoseSignals, Mapping[str, object], dict[str, int]], int]
 
 
@@ -192,6 +200,31 @@ def _rule_post_peak_decel(
     return int(lo + peak + np.argmin(np.gradient(tail)))
 
 
+def _rule_signal_crossing(
+    signals: PoseSignals, params: Mapping[str, object], resolved: dict[str, int]
+) -> int:
+    """兩條訊號交叉的影格：``signal`` 由下方升到 ``reference`` 之上。
+
+    用於「槓鈴通過膝蓋」這類以相對高度定義的事件。比絕對門檻穩健——
+    兩條訊號共用同一個身體尺度，個體差異會互相抵消。
+    """
+    values = _signal(signals, params)
+    other = params.get("reference")
+    if not isinstance(other, str):
+        raise WeakLabelError(f"signal_crossing 需要 reference 參數：{dict(params)}")
+    try:
+        baseline = signals.signals[other]
+    except KeyError as exc:
+        raise WeakLabelError(f"未知的參考訊號 {other!r}") from exc
+
+    lo, hi = _window(params, resolved, values.size)
+    difference = (values - baseline)[lo:hi]
+    above = np.flatnonzero(difference > 0)
+    if above.size == 0:
+        return int(lo + np.argmax(difference))
+    return int(lo + above[0])
+
+
 def _rule_midpoint(
     signals: PoseSignals, params: Mapping[str, object], resolved: dict[str, int]
 ) -> int:
@@ -213,6 +246,7 @@ RULES: dict[str, Resolver] = {
     "signal_onset": _rule_signal_onset,
     "foot_contact": _rule_foot_contact,
     "post_peak_decel": _rule_post_peak_decel,
+    "signal_crossing": _rule_signal_crossing,
     "midpoint": _rule_midpoint,
 }
 
@@ -230,6 +264,7 @@ def derive(
     spec: SportSpec,
     *,
     enforce_order: bool = True,
+    max_tied_events: int = MAX_TIED_EVENTS,
 ) -> dict[str, int]:
     """套用運動項目宣告的弱標註規則，回傳事件 id → 影格索引。
 
@@ -280,5 +315,30 @@ def derive(
             raise WeakLabelError(
                 f"{spec.sport_id!r} 的弱標註違反宣告的事件時序："
                 + ", ".join(f"{e}={resolved[e]}" for e in ordered)
+            )
+
+        counts: dict[int, int] = {}
+        for frame in frames:
+            counts[frame] = counts.get(frame, 0) + 1
+        worst = max(counts.values(), default=0)
+        if worst > max_tied_events:
+            at = max(counts, key=lambda f: counts[f])
+            raise WeakLabelError(
+                f"{spec.sport_id!r} 有 {worst} 個事件擠在影格 {at}，超過上限 "
+                f"{max_tied_events}——搜尋窗互相塌陷，推出來的是邊界值不是事件："
+                + ", ".join(f"{e}={resolved[e]}" for e in ordered)
+            )
+
+        # 只有 address 與 finish 有理由落在片段的頭尾。其他事件被釘在邊界，
+        # 代表它的搜尋窗塌到 `_window` 的退化分支，取到的是邊界值不是極值。
+        last = length - 1
+        pinned = [
+            e for e in ordered
+            if e not in ("address", "finish") and resolved[e] in (0, last)
+        ]
+        if len(pinned) >= 2:
+            raise WeakLabelError(
+                f"{spec.sport_id!r} 有 {len(pinned)} 個中段事件被釘在片段邊界 "
+                f"{pinned}——搜尋窗塌到邊界，取到的不是極值"
             )
     return {e: resolved[e] for e in ordered}

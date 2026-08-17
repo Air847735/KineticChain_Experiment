@@ -14,6 +14,47 @@
 而這條向量在 2D 投影下會縮短；長度接近零時 `atan2` 對關鍵點雜訊極度敏感，微分後產生
 尖刺。**「骨盆峰值旋轉」偵測器實際上是「髖線投影縮短」偵測器。** 取樣率是次要限制。
 
+## 0. 事件定義是否正確（2026-08-17 查證）
+
+對照運動生物力學的標準分期（[Wikipedia: Biomechanics of baseball pitching](https://en.wikipedia.org/wiki/Biomechanics_of_baseball_pitching)、
+[Physiopedia: Throwing Biomechanics](https://www.physio-pedia.com/Throwing_Biomechanics)），
+投球分六期、五個邊界事件：
+
+| 分期 | 起 → 迄 | 本專案對應 |
+|---|---|---|
+| Windup | 抬腿開始 → **最大舉腿** | `loading_start` → `loading_peak` ✅ |
+| Stride | 最大舉腿 → **前腳著地** | → `stride_foot_contact` ✅ |
+| Arm cocking | 前腳著地 → **最大肩外旋（MER）** | ❌ **缺** |
+| Arm acceleration | MER → **出手** | → `release_impact` ✅ |
+| Arm deceleration | 出手 → **最大肩內旋（MIR）** | ❌ **缺** |
+| Follow-through | MIR → 動作停止 | `follow_through_mid` → `finish`（近似） |
+
+**結論：現有的五個節點定義正確，但缺兩個。**
+
+`loading_peak` 的弱標註規則是「前側膝最高」，正好就是文獻的 maximum lead-knee height；
+`stride_foot_contact` 與 `release_impact` 也對得上。動力鏈的
+骨盆 → 軀幹 → 上肢排序也符合文獻描述的
+「lead knee extension → pelvis rotation → upper trunk rotation → elbow extension →
+shoulder internal rotation」。
+
+缺的兩個是：
+
+- **最大肩外旋（MER）**——分隔 cocking 與 acceleration 的邊界，也是肘關節外翻力矩的
+  峰值所在，是投球傷害研究最關注的一刻。
+- **最大肩內旋（MIR）**——分隔減速與隨勢。
+
+### 為什麼沒有補上
+
+MER 定義在**肩關節外旋角**上，需要前臂相對上臂的 3D 方位。單機 2D 姿態只有肩、肘、腕
+三個點，量不到繞上臂長軸的旋轉——這不是規則寫不出來，是資訊本身不在畫面裡。
+
+可以做一個 2D 代理（手腕相對肩膀最靠後的一刻），但那會是**另一個量**，
+不是 MER。依專案規則「canonical 事件的定義是跨運動契約」，我不打算用代理量佔用一個
+看起來像 MER 的事件名。要真的量 MER 需要 3D 姿態或多機位。
+
+`follow_through_mid` 也要標明：它是 `release_impact` 與 `finish` 的**中點**，
+不是文獻上任何一個力學節點，只是一個方便的分段標記。
+
 ## 三個彼此獨立的問題
 
 分析刻意拆成三段，因為它們回答的是不同的事，混在一起會得到錯誤的信心：

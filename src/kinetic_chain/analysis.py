@@ -25,10 +25,25 @@ from .events import CANONICAL_EVENTS, SportSpec
 from .features import PoseSignals
 from .skeleton import JOINT_INDEX
 
-#: 動力鏈上依序傳遞的三個環節，近端到遠端。
+#: 旋轉型動力鏈（投擲／擊球）：骨盆 → 軀幹 → 上肢，近端到遠端。
+#:
+#: 用的是**跨身體連線的方向角**，在 2D 投影下會退化——見 :func:`projection_quality`。
 CHAIN_LINKS: tuple[tuple[str, str], ...] = (
     ("pelvis_peak_rotation", "pelvis_angular_speed"),
     ("torso_peak_rotation", "torso_angular_speed"),
+    ("arm_peak_velocity", "wrist_speed"),
+)
+
+#: 伸展型動力鏈（舉重／跳躍）：髖 → 膝 → 遠端，近端到遠端。
+#:
+#: 用的是**三點夾角**，兩條邊都是長節段（軀幹、大腿、小腿），不會像跨身體連線那樣
+#: 在投影下塌成一點。代價是換了一個平面：夾角要看得見，攝影機必須在矢狀面側邊，
+#: 正面拍會把前後彎曲壓扁（實測正面片段的髖角範圍只有 169–180°）。
+#:
+#: 沒有踝關節那一環——canonical 13 點沒有腳趾，量不到蹠屈。
+EXTENSION_CHAIN_LINKS: tuple[tuple[str, str], ...] = (
+    ("hip_extension_peak", "hip_extension_speed"),
+    ("knee_extension_peak", "knee_extension_speed"),
     ("arm_peak_velocity", "wrist_speed"),
 )
 
@@ -257,6 +272,7 @@ def unconstrained_sequence(
     signals: PoseSignals,
     *,
     window: tuple[int, int] | None = None,
+    links: tuple[tuple[str, str], ...] | None = None,
 ) -> dict[str, int]:
     """直接取原始訊號的峰值，**不套任何順序假設**。
 
@@ -270,9 +286,13 @@ def unconstrained_sequence(
         `(lo, hi)` 影格範圍。``None`` 表示整段。給定加速階段的範圍時，量到的是
         「投球動作內的峰值」；不給則包含隨勢，兩者的答案可能不同——差異本身
         就是結果的一部分。
+    links:
+        要量的環節，預設 :data:`CHAIN_LINKS`（旋轉型）。伸展型動作傳
+        :data:`EXTENSION_CHAIN_LINKS`。回傳的鍵是 ``links`` 裡的事件名，
+        不必是已註冊的事件——``hip_extension_peak`` 只是量測用的標籤。
     """
     peaks: dict[str, int] = {}
-    for event, signal_name in CHAIN_LINKS:
+    for event, signal_name in (links or CHAIN_LINKS):
         values = signals.signals[signal_name]
         lo, hi = (0, values.size) if window is None else window
         lo = max(0, min(lo, values.size - 1))

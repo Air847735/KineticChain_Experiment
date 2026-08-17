@@ -40,11 +40,11 @@ flowchart LR
         direction TB
         NORM["正規化<br/>骨盆置中 · 尺度 · 左右鏡射"] --> SG["Savitzky–Golay 平滑"]
         SG --> DIFF["一階差分<br/>角速度 · 線速度"]
-        DIFF --> FEAT["特徵矩陣<br/>T × 54"]
+        DIFF --> FEAT["特徵矩陣<br/>T × 58"]
     end
     subgraph S3["③ 模型（唯一有參數）"]
         direction TB
-        NET["KineticChainNet<br/>553,421 參數"] --> LOG["逐格 logits<br/>13 × T"]
+        NET["KineticChainNet<br/>554,739 參數"] --> LOG["逐格 logits<br/>19 × T"]
     end
     subgraph S4["④ 解碼（確定性）"]
         direction TB
@@ -60,20 +60,20 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    IN["特徵 B × T × 54"] --> TP["轉置 → B × 54 × T"]
-    TP --> PROJ["Conv1d 54 → 128<br/>kernel 1"]
+    IN["特徵 B × T × 58"] --> TP["轉置 → B × 58 × T"]
+    TP --> PROJ["Conv1d 58 → 128<br/>kernel 1"]
     PROJ --> B0["殘差塊 · dilation 1"]
     B0 --> B1["殘差塊 · dilation 2"]
     B1 --> B2["殘差塊 · dilation 4"]
     B2 --> B3["殘差塊 · dilation 8"]
     B3 --> B4["殘差塊 · dilation 16"]
     B4 --> B5["殘差塊 · dilation 32"]
-    B5 --> HEAD["Conv1d 128 → 13<br/>kernel 1"]
+    B5 --> HEAD["Conv1d 128 → 19<br/>kernel 1"]
     HEAD --> MASK["padding 位置填 −inf"]
-    MASK --> OUT["logits B × 13 × T"]
+    MASK --> OUT["logits B × 19 × T"]
 ```
 
-六層 dilation 逐層加倍，雙向感受野 `1 + 2 × (5−1) × (1+2+4+8+16+32) = 505` 影格，
+輸入 58 維、輸出 19 個事件槽。六層 dilation 逐層加倍，雙向感受野 `1 + 2 × (5−1) × (1+2+4+8+16+32) = 505` 影格，
 覆蓋典型片段的全長（GolfDB 長度中位數 282 格）。時間解析度不損失——每一層的
 padding 都設成 `dilation × (kernel−1) ÷ 2`，長度全程等於 `T`。
 
@@ -99,7 +99,7 @@ flowchart TB
 
 ### 輸出與訓練目標
 
-模型對 13 個事件槽各輸出一條逐影格 logits；某個運動只用到其中幾個槽，其餘遮罩掉。
+模型對 19 個事件槽各輸出一條逐影格 logits；某個運動只用到其中幾個槽，其餘遮罩掉。
 每一槽在**時間軸**上做 softmax，得到「這個事件發生在第幾格」的機率分布。
 
 - **訓練**：目標不是 one-hot，而是以真值為中心、標準差 `0.05 秒` 的離散高斯，
@@ -235,7 +235,7 @@ print(result.format())
 pytest
 ```
 
-107 個測試，全部不需要 GPU、不需要資料集、不需要網路（模型與弱標註以合成動作驗證）。
+110 個測試，全部不需要 GPU、不需要資料集、不需要網路（模型與弱標註以合成動作驗證）。
 
 測試重點在不變式而不是分數：順序約束解碼以窮舉法比對全域最佳解；特徵的平移／縮放／
 鏡射不變性；padding 不得被選為事件；checkpoint 與運動項目註冊表不一致時必須拒絕載入。
@@ -250,9 +250,9 @@ pytest
 |---|---|
 | SwingNet（論文，RGB + 增強） | 0.761 |
 | SwingNet（作者 repo，RGB 無增強） | 0.715 |
-| **本專案，只訓練高爾夫** | **0.787 ± 0.005** |
-| 本專案，聯合訓練（不含 Penn Action 高爾夫） | 0.781 ± 0.006 |
-| 本專案，聯合訓練（六個運動全含） | 0.771 ± 0.005 |
+| **本專案，只訓練高爾夫** | **0.786 ± 0.006** |
+| 本專案，聯合訓練（不含 Penn Action 高爾夫） | 0.779 ± 0.001 |
+| 本專案，聯合訓練（七個運動全含） | 0.778 ± 0.006 |
 
 不是嚴格對照：資料集、四折協定與 PCE 定義相同，但本專案吃 2D 姿態、SwingNet 吃 RGB。
 SwingNet 的數字引自論文與作者 repo，未在本機重跑。
@@ -319,6 +319,31 @@ PCE 看不出實際誤差幾格，直接看誤差分布更清楚（第 1 折 349
 
 四折共 1391 段 + 多運動 463 段驗證片段，順序違反數 **0**。由解碼器的 DP 轉移限制保證，
 並由單元測試以窮舉法比對全域最佳解驗證。
+
+## 舉重分析：兩種動力鏈
+
+第七個運動是舉重挺舉（Penn Action `clean_and_jerk`，60 段）。加它是為了驗證一個
+可否證的預測：投球的序列量不出來，是因為旋轉型動力鏈用的**跨身體連線方向角**在 2D
+投影下會塌陷；舉重是**伸展型**，用三點夾角，兩條邊都是長節段，不會塌。
+
+![兩種動力鏈的可測性](docs/figures/chain_comparison.png)
+
+同一套流程、同一個指標：
+
+| 動力鏈 | 量測用的幾何量 | 近端→遠端成立率 |
+|---|---|---|
+| 旋轉（高爾夫 face-on，最好的機位） | 髖線／肩線的**方向角** | 18%（n=454） |
+| **伸展（舉重，矢狀面可見）** | 髖／膝的**三點夾角** | **42%**（n=50） |
+| 隨機基準 | | 16.7% |
+
+預測成立。**機位需求也剛好相反**：旋轉在水平面，要正面／45°；伸展在矢狀面，
+要側面——正面拍的舉重片段髖角範圍只剩 169–180°，彎曲被完全壓扁。
+
+另一個架構上的發現：舉重的 9 個事件裡只有 **3 個**用得上 canonical 詞彙
+（其他運動用 8–10 個）。canonical 詞彙是從投擲／擊球歸納出來的，
+`stride_foot_contact`、`pelvis_peak_rotation`、`release_impact` 都預設了
+「單側、旋轉、有釋放物」，換到雙側伸展的舉重就對不上。完整報告見
+`docs/lift-analysis.md`。
 
 ## 棒球投球分析
 
@@ -427,10 +452,12 @@ src/kinetic_chain/
   train.py evaluate.py infer.py cli.py
 scripts/             實驗、視覺化與繪圖（輸出不含人物影像）
 docs/figures/        README 與報告用的圖，皆為圖表，無人物影像
-tests/               107 個測試
+tests/               110 個測試
 docs/spec.md         需求、範圍與成功標準
 docs/architecture.md 系統、演算法與驗證設計
 docs/pitch-analysis.md 棒球投球動力鏈分析報告
+docs/lift-analysis.md  舉重動力鏈分析報告
+docs/data-map.md       各運動的資料、權重與實驗檔案對照表
 ```
 
 ## Adding a Sport
@@ -450,7 +477,7 @@ docs/pitch-analysis.md 棒球投球動力鏈分析報告
 ## Configuration
 
 - `ModelConfig`：`hidden=128`、`num_layers=6`、`kernel_size=5`、`sport_embedding=32`。
-  參數量 553,421，雙向感受野 505 影格。
+  參數量 554,739，雙向感受野 505 影格。輸入 58 維力學特徵，輸出 19 個事件槽。
 - `TrainConfig`：`epochs=60`、`batch_size=16`、`learning_rate=3e-4`、
   `sigma_seconds=0.05`（軟目標寬度，以秒定義故與 fps 無關）。
 - RTMPose 權重快取於 `~/.cache/rtmlib`，跨 conda 環境共用。
