@@ -31,6 +31,10 @@ pose = [
 data = [
     "pandas>=2.0",
 ]
+# 視覺化。只有 scripts/visualize_chain.py 用到，核心層與測試都不依賴。
+viz = [
+    "matplotlib>=3.8",
+]
 dev = [
     "pytest>=7.4",
 ]
