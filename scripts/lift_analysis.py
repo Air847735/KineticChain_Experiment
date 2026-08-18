@@ -35,14 +35,29 @@ logger = logging.getLogger("lift")
 SPORT = "clean_and_jerk"
 EXPECTED = tuple(name for name, _ in EXTENSION_CHAIN_LINKS)
 
-#: 髖角最小值高於此值時，矢狀面沒有被拍到——彎曲被投影壓扁，伸展量測無效。
-#: 實測：明顯正面的片段髖角範圍只有 169–180°；側面片段可低到 60° 以下。
-SAGITTAL_VISIBLE_DEG = 120.0
+#: 髖角低百分位高於此值時，矢狀面沒有被拍到——彎曲被投影壓扁，伸展量測無效。
+#:
+#: 門檻取 90°：實測分層顯示 <90° 的片段伸展序列成立率 64.7%，>=90° 只有 32.6%
+#: （隨機基準 16.7%），是接近兩倍的差距。初版取 120° 太寬鬆，60 段裡有 50 段通過，
+#: 因此完全看不出視角的影響。
+SAGITTAL_VISIBLE_DEG = 90.0
+
+#: 判定矢狀面可見度時取的百分位，而不是最小值。
+#:
+#: 取最小值會被單一壞影格帶走：實測有 11 段的髖角最小值低於 25°，那在解剖上不可能
+#: （完整深蹲時軀幹貼大腿約 30–40°），而那些片段的角度抖動是其他片段的兩倍
+#: （二階差分 RMS 3.2 vs 1.5，與最小值的相關性 r = −0.44）。改取第 5 百分位後
+#: 與抖動的相關性降到 +0.16。
+VISIBILITY_PERCENTILE = 5.0
 
 
 def sagittal_visibility(clip) -> float:
-    """該片段的髖角最小值（度）。越小代表越看得見前後彎曲，即越接近側面機位。"""
-    return float(np.degrees(clip.signals().signals["hip_angle"].min()))
+    """該片段髖角的低百分位（度）。越小代表越看得見前後彎曲，即越接近側面機位。
+
+    **不取最小值**——最小值對單一壞影格極度敏感，見 :data:`VISIBILITY_PERCENTILE`。
+    """
+    angles = np.degrees(clip.signals().signals["hip_angle"])
+    return float(np.percentile(angles, VISIBILITY_PERCENTILE))
 
 
 def main() -> int:
@@ -72,13 +87,15 @@ def main() -> int:
     side = visibility < SAGITTAL_VISIBLE_DEG
     results["viewpoint"] = {
         "threshold_deg": SAGITTAL_VISIBLE_DEG,
-        "median_hip_min_deg": float(np.median(visibility)),
+        "percentile": VISIBILITY_PERCENTILE,
+        "median_hip_angle_deg": float(np.median(visibility)),
         "sagittal_visible": int(side.sum()),
         "total": len(clips),
     }
     logger.info(
-        "矢狀面可見（髖角最小 <%.0f°）：%d / %d 段，中位 %.0f°",
-        SAGITTAL_VISIBLE_DEG, side.sum(), len(clips), np.median(visibility),
+        "矢狀面可見（髖角第 %.0f 百分位 <%.0f°）：%d / %d 段，中位 %.0f°",
+        VISIBILITY_PERCENTILE, SAGITTAL_VISIBLE_DEG, side.sum(),
+        len(clips), np.median(visibility),
     )
 
     # ---------------------------------------------------------------- 偵測表現
@@ -110,11 +127,17 @@ def main() -> int:
     }
 
     # ------------------------------------------------- 伸展型動力鏈（無約束量測）
-    for scope, only_side in (("all", False), ("sagittal_visible", True)):
+    for scope, only_side in (("all", False), ("sagittal_visible", True), ("frontal", None)):
         orders: dict[str, int] = {}
         widths = {name: [] for name, _ in EXTENSION_CHAIN_LINKS}
-        subset = [c for c, v in zip(clips, visibility)
-                  if not only_side or v < SAGITTAL_VISIBLE_DEG]
+        if only_side is None:            # 對照組：矢狀面看不清楚的那一批
+            subset = [c for c, v in zip(clips, visibility) if v >= SAGITTAL_VISIBLE_DEG]
+        elif only_side:
+            subset = [c for c, v in zip(clips, visibility) if v < SAGITTAL_VISIBLE_DEG]
+        else:
+            subset = list(clips)
+        if not subset:
+            continue
         for clip in subset:
             signals = clip.signals()
             lo = clip.events.get("clean_liftoff", 0)
