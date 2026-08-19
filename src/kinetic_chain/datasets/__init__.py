@@ -6,6 +6,6 @@
 
 from __future__ import annotations
 
-from . import golfdb, pennaction
+from . import golfdb, local_video, pennaction
 
-__all__ = ["golfdb", "pennaction"]
+__all__ = ["golfdb", "local_video", "pennaction"]

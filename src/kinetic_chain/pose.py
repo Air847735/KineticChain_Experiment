@@ -117,8 +117,8 @@ class PoseExtractor:
         height, width = frame.shape[:2]
         return [[0.0, 0.0, float(width), float(height)]]
 
-    def extract_frame(self, frame: np.ndarray) -> np.ndarray:
-        """單張影像 → ``(17, 3)``。找不到人時回傳全 0（信心 0）。"""
+    def candidates(self, frame: np.ndarray) -> np.ndarray:
+        """單張影像 → ``(N, 17, 3)``，畫面中偵測到的所有人。"""
         if self._pose is not None:
             keypoints, scores = self._pose(frame, bboxes=self._bboxes(frame))
         else:
@@ -127,13 +127,60 @@ class PoseExtractor:
         keypoints = np.asarray(keypoints, dtype=np.float32)
         scores = np.asarray(scores, dtype=np.float32)
         if keypoints.size == 0:
-            return np.zeros((17, 3), dtype=np.float32)
+            return np.zeros((0, 17, 3), dtype=np.float32)
+        if keypoints.ndim == 2:      # 單人時 rtmlib 可能少一個維度
+            keypoints = keypoints[None]
+            scores = scores[None]
+        return np.concatenate([keypoints, scores[..., None]], axis=-1).astype(np.float32)
 
-        # 多人時取平均信心最高的那一位
-        best = int(np.argmax(scores.mean(axis=1))) if scores.ndim == 2 else 0
-        return np.concatenate(
-            [keypoints[best], scores[best][:, None]], axis=-1
-        ).astype(np.float32)
+    @staticmethod
+    def _extent(person: np.ndarray) -> float:
+        """關鍵點外接框的對角線長度，當作「這個人在畫面上多大」。"""
+        visible = person[person[:, 2] > 0.3, :2]
+        if visible.shape[0] < 2:
+            return 0.0
+        span = visible.max(axis=0) - visible.min(axis=0)
+        return float(np.hypot(*span))
+
+    def _select(self, people: np.ndarray, previous: np.ndarray | None) -> np.ndarray:
+        """從候選中挑出目標運動員。
+
+        單純取「信心最高」在乾淨的裁切片段上沒問題，但在真實場景會失效：健身房或
+        比賽背景常有其他人，他們的姿態一樣清晰、信心一樣高。實測一支自備影片時，
+        骨盆位置逐格最大跳動 810 px、身高變異係數 0.67——偵測器整段都在人之間跳。
+
+        改成兩個準則：**畫面上最大的人**（目標運動員離鏡頭最近），加上**時間連續性**
+        （與前一格選中的人位置接近）。兩者相乘，避免單一準則被短暫遮擋帶走。
+        """
+        if people.shape[0] == 0:
+            return np.zeros((17, 3), dtype=np.float32)
+        if people.shape[0] == 1:
+            return people[0]
+
+        extents = np.array([self._extent(p) for p in people])
+        scale = float(extents.max()) or 1.0
+        weights = extents / scale
+
+        if previous is not None and self._extent(previous) > 0:
+            anchor = np.median(previous[previous[:, 2] > 0.3, :2], axis=0)
+            centres = np.array([
+                np.median(p[p[:, 2] > 0.3, :2], axis=0)
+                if (p[:, 2] > 0.3).any() else np.array([np.inf, np.inf])
+                for p in people
+            ])
+            distance = np.linalg.norm(centres - anchor, axis=1)
+            # 以前一格的身體尺度為單位；距離一個身長時權重降到約 1/2
+            weights = weights / (1.0 + distance / max(self._extent(previous), 1.0))
+
+        return people[int(np.argmax(weights))]
+
+    def extract_frame(self, frame: np.ndarray) -> np.ndarray:
+        """單張影像 → ``(17, 3)``。找不到人時回傳全 0（信心 0）。
+
+        無狀態，逐格獨立選人。整段影片請用 :meth:`extract_video`，它會維持
+        時間連續性。
+        """
+        return self._select(self.candidates(frame), None)
 
     def extract_video(self, path: Path | str, *, progress: bool = False) -> PoseSequence:
         """整支影片 → :class:`PoseSequence`。"""
@@ -150,7 +197,13 @@ class PoseExtractor:
             except ImportError:
                 pass
 
-        keypoints = [self.extract_frame(frame) for frame in frames]
+        keypoints = []
+        previous: np.ndarray | None = None
+        for frame in frames:
+            person = self._select(self.candidates(frame), previous)
+            keypoints.append(person)
+            if self._extent(person) > 0:
+                previous = person
         if not keypoints:
             raise PoseExtractionError(f"影片沒有任何可解碼的影格：{path}")
 

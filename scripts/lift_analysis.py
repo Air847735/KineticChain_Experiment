@@ -64,6 +64,16 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=Path, default=Path("runs/lift/model.pt"))
     parser.add_argument("--pennaction-root", type=Path, default=Path("data/raw/Penn_Action"))
+    parser.add_argument(
+        "--source", choices=["pennaction", "local"], default="pennaction",
+        help="pennaction = 公開資料集（人工姿態、30 fps）；local = 自備影片（RTMPose 姿態）",
+    )
+    parser.add_argument("--local-root", type=Path, default=Path("/srv/datasets/weight"))
+    parser.add_argument("--local-cache", type=Path, default=Path("data/cache/own_weight"))
+    parser.add_argument(
+        "--no-auto-trim", action="store_true",
+        help="自備影片預設自動裁切到單次動作；加此旗標關閉",
+    )
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--output", type=Path, default=Path("runs/lift_analysis.json"))
@@ -76,11 +86,21 @@ def main() -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
-    from kinetic_chain.datasets import pennaction
+    if args.source == "local":
+        from kinetic_chain.datasets import local_video
 
-    clips = pennaction.load(args.pennaction_root, sports=[SPORT])
+        clips = local_video.load(
+            args.local_root, args.local_cache, SPORT, auto=not args.no_auto_trim
+        )
+    else:
+        from kinetic_chain.datasets import pennaction
+
+        clips = pennaction.load(args.pennaction_root, sports=[SPORT])
     spec = get_sport(SPORT)
-    results: dict = {"sport": SPORT, "clips": len(clips)}
+    results: dict = {"sport": SPORT, "source": args.source, "clips": len(clips),
+                     "median_fps": float(np.median([c.fps for c in clips])) if clips else 0.0}
+    if not clips:
+        raise SystemExit("沒有讀入任何片段")
 
     # ------------------------------------------------------------------ 機位
     visibility = np.array([sagittal_visibility(c) for c in clips])
@@ -99,7 +119,11 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------- 偵測表現
-    _, val_clips = split_clips(clips, val_fraction=0.2, seed=args.seed)
+    if args.source == "local":
+        # 模型是用 Penn Action 訓練的，自備影片整批都沒見過——全部都是驗證集。
+        val_clips = list(clips)
+    else:
+        _, val_clips = split_clips(clips, val_fraction=0.2, seed=args.seed)
     model = load_checkpoint(args.checkpoint, device=args.device)
     reports = evaluate_clips(model, val_clips, device=args.device)
     key = f"{SPORT}/weak"
@@ -151,23 +175,29 @@ def main() -> int:
             orders[key_order] = orders.get(key_order, 0) + 1
             for name, signal in EXTENSION_CHAIN_LINKS:
                 values = np.asarray(signals.signals[signal], dtype=float)
-                widths[name].append(_fwhm(values))
+                # 換算成毫秒才能跨幀率比較——同一個生理事件在 60 fps 下佔的格數是
+                # 30 fps 的兩倍，用「格」比會得出相反的結論。
+                widths[name].append(_fwhm(values) / clip.fps * 1000.0)
         total = max(len(subset), 1)
         results[f"extension_chain_{scope}"] = {
             "n": len(subset),
             "proximal_to_distal_rate": orders.get("hip → knee → arm", 0) / total,
             "orders": {k: v / total for k, v in sorted(orders.items(), key=lambda kv: -kv[1])},
-            "median_peak_width_frames": {k: float(np.median(v)) for k, v in widths.items()},
+            "median_peak_width_ms": {k: float(np.median(v)) for k, v in widths.items()},
+            "arm_last_rate": sum(
+                v for k, v in orders.items() if k.endswith("→ arm")
+            ) / total,
         }
         logger.info(
-            "伸展序列（%s，n=%d）：髖→膝→上肢成立 %.1f%%",
+            "伸展序列（%s，n=%d）：髖→膝→上肢 %.1f%%，上肢排最後 %.1f%%",
             scope, len(subset),
             results[f"extension_chain_{scope}"]["proximal_to_distal_rate"] * 100,
+            results[f"extension_chain_{scope}"]["arm_last_rate"] * 100,
         )
 
     results["random_baseline"] = 1 / 6
 
-    if args.figure is not None:
+    if args.figure is not None and str(args.figure):
         _comparison_figure(results, args.figure)
         logger.info("→ %s", args.figure)
     args.output.parent.mkdir(parents=True, exist_ok=True)
