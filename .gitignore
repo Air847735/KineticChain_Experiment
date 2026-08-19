@@ -10,3 +10,6 @@ __pycache__/
 build/
 dist/
 .venv/
+
+# 誤產生的空白圖檔（--figure "" 造成），不得再進版控
+.png
