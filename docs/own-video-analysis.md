@@ -193,3 +193,24 @@ clips = annotations.load("annotations/weight.csv", "data/cache/own_weight", "cle
 產出的 `Clip.label_source` 是 `"human"`，與弱標註在所有報表中分開統計。
 載入時會驗證：欄名是註冊過的事件、影格編號落在影片長度內、順序符合該運動宣告的時序。
 任何一項不符直接報錯，不靜默修正。
+
+### 標註工具
+
+`tools/annotator.html` —— 單一檔案的本機網頁，用瀏覽器開即可，不需安裝任何東西、
+不連網、無外部相依。做成網頁而不是桌面程式，是因為開發環境是遠端工作階段沒有圖形介面，
+而瀏覽器的影片解碼與逐格控制都比自己刻可靠。
+
+```bash
+python -m http.server -d tools 8080     # 或直接用瀏覽器開啟 tools/annotator.html
+```
+
+流程：載入影片資料夾 → 載入 `annotations/weight.csv`（把預填的預測值帶進來）→
+逐格核對 → 匯出 CSV。
+
+- 影格編號由 `currentTime × fps` 換算，fps 取自 CSV；跳格時定位到影格中點避免邊界抖動。
+- 鍵盤：方向鍵前後一格（按住 Shift 為十格）、空白播放／暫停、數字鍵把該事件設為目前影格、
+  Backspace 清除（留空白＝未標註）、`[` `]` 切換影片。
+- 事件欄位由載入的 CSV 決定；**減少階段數只要用少欄位的 CSV**，工具不寫死。
+- 匯出的檔案可直接餵給 `datasets/annotations.load()`。
+
+工具本身不含任何影片資料；影片是使用者在瀏覽器端選取的，不會離開本機。

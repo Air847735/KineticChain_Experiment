@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KineticChain 事件標註</title>
+<style>
+:root{
+  --ground:#101315; --surface:#181c1f; --raised:#20262a; --ink:#e6eaec; --muted:#93a0a7;
+  --line:#2a3136; --accent:#d6a044; --good:#4fb06e; --bad:#e2695f;
+  --sans:"PingFang TC","Noto Sans TC","Microsoft JhengHei",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.6}
+header{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:12px 18px;
+  border-bottom:1px solid var(--line);background:var(--surface);position:sticky;top:0;z-index:10}
+h1{font-size:15px;margin:0 12px 0 0;font-weight:700;letter-spacing:-.01em;white-space:nowrap}
+button,label.file{background:var(--raised);color:var(--ink);border:1px solid var(--line);border-radius:4px;
+  padding:6px 12px;font-family:inherit;font-size:13.5px;cursor:pointer}
+button:hover,label.file:hover{border-color:var(--accent)}
+button:disabled{opacity:.4;cursor:default}
+button.primary{background:var(--accent);color:#1a1205;border-color:var(--accent);font-weight:600}
+input[type=file]{display:none}
+main{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:0;height:calc(100vh - 57px)}
+@media (max-width:960px){main{grid-template-columns:1fr;height:auto}}
+#stage{display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--line)}
+#viewport{flex:1;display:flex;align-items:center;justify-content:center;background:#000;min-height:320px;overflow:hidden}
+video{max-width:100%;max-height:100%;display:block}
+#transport{padding:10px 16px;border-top:1px solid var(--line);background:var(--surface);
+  display:flex;flex-direction:column;gap:8px}
+#scrub{width:100%;accent-color:var(--accent)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.counter{font-family:var(--mono);font-size:13px;color:var(--muted);white-space:nowrap}
+.counter b{color:var(--ink);font-size:15px}
+aside{overflow-y:auto;background:var(--surface);display:flex;flex-direction:column}
+.panel{padding:12px 16px;border-bottom:1px solid var(--line)}
+.panel h2{font-size:11.5px;font-family:var(--mono);letter-spacing:.12em;text-transform:uppercase;
+  color:var(--muted);margin:0 0 8px;font-weight:500}
+#clips{display:flex;flex-direction:column;gap:2px}
+.clip{display:flex;justify-content:space-between;gap:8px;padding:5px 8px;border-radius:3px;cursor:pointer;font-size:13.5px}
+.clip:hover{background:var(--raised)}
+.clip.active{background:var(--raised);box-shadow:inset 2px 0 0 var(--accent)}
+.clip .n{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.clip.done .n{color:var(--good)}
+#events{display:flex;flex-direction:column;gap:3px}
+.ev{display:grid;grid-template-columns:22px 1fr 62px 26px;gap:6px;align-items:center;
+  padding:5px 6px;border-radius:3px;border:1px solid transparent}
+.ev:hover{background:var(--raised)}
+.ev.cur{border-color:var(--accent)}
+.ev .k{font-family:var(--mono);font-size:11px;color:var(--muted);text-align:center}
+.ev .nm{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ev .f{font-family:var(--mono);font-size:12.5px;text-align:right;cursor:pointer}
+.ev .f.set{color:var(--good)} .ev .f.empty{color:var(--muted)}
+.ev .x{font-size:12px;color:var(--muted);cursor:pointer;text-align:center;border-radius:3px}
+.ev .x:hover{color:var(--bad);background:var(--ground)}
+kbd{font-family:var(--mono);font-size:11px;background:var(--ground);border:1px solid var(--line);
+  border-radius:3px;padding:1px 5px;color:var(--muted)}
+.hint{font-size:12.5px;color:var(--muted);line-height:1.75}
+.warn{color:var(--bad)}
+textarea{width:100%;height:120px;background:var(--ground);color:var(--ink);border:1px solid var(--line);
+  border-radius:4px;font-family:var(--mono);font-size:11px;padding:8px;resize:vertical}
+</style>
+</head>
+<body>
+<header>
+  <h1>KineticChain 事件標註</h1>
+  <label class="file">選影片資料夾<input type="file" id="vids" accept="video/*" multiple webkitdirectory></label>
+  <label class="file">或選個別影片<input type="file" id="vids2" accept="video/*" multiple></label>
+  <label class="file">載入 CSV<input type="file" id="csv" accept=".csv,text/csv"></label>
+  <button id="export" class="primary" disabled>匯出 CSV</button>
+  <span class="counter" id="status">尚未載入</span>
+</header>
+
+<main>
+  <section id="stage">
+    <div id="viewport"><video id="v" playsinline preload="metadata"></video></div>
+    <div id="transport">
+      <input type="range" id="scrub" min="0" max="0" value="0" step="1" disabled>
+      <div class="row">
+        <button id="prev10">&laquo; 10</button>
+        <button id="prev1">&lsaquo; 1</button>
+        <button id="play">播放</button>
+        <button id="next1">1 &rsaquo;</button>
+        <button id="next10">10 &raquo;</button>
+        <span class="counter">影格 <b id="fnum">0</b> / <span id="ftot">0</span>
+          &nbsp;·&nbsp; <span id="tsec">0.00</span>s &nbsp;·&nbsp; <span id="fpsv">–</span> fps</span>
+      </div>
+    </div>
+  </section>
+
+  <aside>
+    <div class="panel">
+      <h2>影片</h2>
+      <div id="clips"><span class="hint">先載入影片。CSV 可選，載入後會把既有標註填進來。</span></div>
+    </div>
+    <div class="panel">
+      <h2>事件</h2>
+      <div id="events"><span class="hint">尚未載入。</span></div>
+    </div>
+    <div class="panel">
+      <h2>操作</h2>
+      <p class="hint">
+        <kbd>←</kbd><kbd>→</kbd> 前後一格　<kbd>Shift</kbd>+方向 十格<br>
+        <kbd>空白</kbd> 播放／暫停　<kbd>1</kbd>–<kbd>9</kbd> 把該事件設為目前影格<br>
+        <kbd>Backspace</kbd> 清除目前選取的事件（留空白＝未標註）<br>
+        <kbd>[</kbd><kbd>]</kbd> 上一支／下一支影片
+      </p>
+      <p class="hint warn" id="unsaved" style="display:none">尚未匯出的變更</p>
+    </div>
+    <div class="panel">
+      <h2>匯出</h2>
+      <textarea id="out" readonly placeholder="按「匯出 CSV」後在這裡也會顯示一份，可直接複製"></textarea>
+      <div class="row" style="margin-top:8px"><button id="copy">複製到剪貼簿</button></div>
+    </div>
+  </aside>
+</main>
+
+<script>
+const META = ["video","attempt","fps","note"];
+const DEFAULT_EVENTS = ["address","clean_liftoff","clean_knee_pass","clean_catch",
+  "clean_recovery","clean_jerk_dip","arm_peak_velocity","clean_overhead","finish"];
+
+const S = { files:new Map(), order:[], idx:-1, events:DEFAULT_EVENTS.slice(),
+            rows:new Map(), fps:30, cur:0, dirty:false, sel:0 };
+
+const $ = id => document.getElementById(id);
+const v = $("v");
+
+/* ---------- CSV ---------- */
+function parseCSV(text){
+  const lines = text.replace(/^﻿/,"").split(/\r?\n/).filter(l=>l.trim());
+  if(!lines.length) return {events:[],rows:[]};
+  const split = l => { // 支援引號包住的欄位（備註可能含逗號）
+    const out=[]; let cur="", q=false;
+    for(const ch of l){
+      if(ch === '"'){ q=!q; continue; }
+      if(ch === "," && !q){ out.push(cur); cur=""; continue; }
+      cur+=ch;
+    }
+    out.push(cur); return out;
+  };
+  const head = split(lines[0]).map(s=>s.trim());
+  const events = head.filter(h=>h && !META.includes(h));
+  const rows = lines.slice(1).map(l=>{
+    const cells = split(l); const o={};
+    head.forEach((h,i)=> o[h] = (cells[i]??"").trim());
+    return o;
+  });
+  return {events, rows};
+}
+function toCSV(){
+  const head = ["video","attempt","fps",...S.events,"note"];
+  const esc = s => /[",\n]/.test(s) ? '"'+String(s).replace(/"/g,'""')+'"' : s;
+  const body = S.order.map(name=>{
+    const r = S.rows.get(name) || {};
+    return head.map(h=>{
+      if(h==="video") return name;
+      if(h==="attempt") return r.attempt || "1";
+      if(h==="fps") return r.fps || "";
+      if(h==="note") return esc(r.note || "");
+      const val = r[h];
+      return (val===undefined || val===null || val==="") ? "" : String(val);
+    }).join(",");
+  });
+  return [head.join(","), ...body].join("\n") + "\n";
+}
+
+/* ---------- 影片 ---------- */
+function loadVideos(list){
+  for(const f of list){
+    if(!/\.(mov|mp4|m4v|avi|mkv|webm)$/i.test(f.name)) continue;
+    const stem = f.name.replace(/\.[^.]+$/,"");
+    S.files.set(stem, f);
+    if(!S.order.includes(stem)) S.order.push(stem);
+    if(!S.rows.has(stem)) S.rows.set(stem, {attempt:"1", fps:"", note:""});
+  }
+  S.order.sort();
+  renderClips();
+  if(S.idx < 0 && S.order.length) select(0);
+  $("export").disabled = !S.order.length;
+  status();
+}
+function select(i){
+  if(i<0 || i>=S.order.length) return;
+  S.idx = i; S.sel = 0;
+  const name = S.order[i], file = S.files.get(name);
+  const row = S.rows.get(name) || {};
+  S.fps = parseFloat(row.fps) || S.fps || 30;
+  if(file){
+    if(v.dataset.url) URL.revokeObjectURL(v.dataset.url);
+    const url = URL.createObjectURL(file);
+    v.dataset.url = url; v.src = url;
+    v.onloadedmetadata = ()=>{
+      const total = Math.max(0, Math.round(v.duration * S.fps) - 1);
+      $("scrub").max = total; $("scrub").disabled = false; $("ftot").textContent = total;
+      seek(parseInt(row[S.events[0]]) || 0);
+    };
+  }
+  $("fpsv").textContent = S.fps.toFixed(2);
+  renderClips(); renderEvents();
+}
+function seek(f){
+  const max = parseInt($("scrub").max) || 0;
+  S.cur = Math.max(0, Math.min(max, Math.round(f)));
+  v.currentTime = (S.cur + 0.5) / S.fps;   // 取影格中點，避免邊界抖動
+  $("scrub").value = S.cur; $("fnum").textContent = S.cur;
+  $("tsec").textContent = (S.cur / S.fps).toFixed(2);
+  renderEvents();
+}
+const step = d => seek(S.cur + d);
+
+/* ---------- 標註 ---------- */
+function setEvent(i){
+  const name = S.order[S.idx]; if(!name) return;
+  const row = S.rows.get(name); row[S.events[i]] = S.cur;
+  row.fps = row.fps || S.fps.toFixed(2);
+  S.sel = i; mark(); renderEvents(); renderClips();
+}
+function clearEvent(i){
+  const name = S.order[S.idx]; if(!name) return;
+  S.rows.get(name)[S.events[i]] = "";
+  mark(); renderEvents(); renderClips();
+}
+function mark(){ S.dirty = true; $("unsaved").style.display="block"; status(); }
+
+/* ---------- 畫面 ---------- */
+function renderClips(){
+  const box = $("clips");
+  if(!S.order.length){ box.innerHTML='<span class="hint">先載入影片。</span>'; return; }
+  box.innerHTML = "";
+  S.order.forEach((name,i)=>{
+    const row = S.rows.get(name)||{};
+    const n = S.events.filter(e=>row[e]!=="" && row[e]!==undefined).length;
+    const d = document.createElement("div");
+    d.className = "clip" + (i===S.idx?" active":"") + (n===S.events.length?" done":"");
+    d.innerHTML = `<span>${name}</span><span class="n">${n}/${S.events.length}</span>`;
+    d.onclick = ()=>select(i);
+    box.appendChild(d);
+  });
+}
+function renderEvents(){
+  const box = $("events");
+  const name = S.order[S.idx];
+  if(!name){ box.innerHTML='<span class="hint">尚未載入。</span>'; return; }
+  const row = S.rows.get(name)||{};
+  box.innerHTML = "";
+  S.events.forEach((e,i)=>{
+    const val = row[e];
+    const has = val!=="" && val!==undefined && val!==null;
+    const d = document.createElement("div");
+    d.className = "ev" + (i===S.sel?" cur":"");
+    d.innerHTML =
+      `<span class="k">${i<9?i+1:""}</span>` +
+      `<span class="nm" title="${e}">${e.replace(/^clean_/,"").replace("_peak_velocity","_drive")}</span>` +
+      `<span class="f ${has?"set":"empty"}">${has?("f"+val):"—"}</span>` +
+      `<span class="x" title="清除">×</span>`;
+    d.querySelector(".nm").onclick = ()=>{ S.sel=i; if(has) seek(parseInt(val)); renderEvents(); };
+    d.querySelector(".f").onclick  = ()=>{ if(has) seek(parseInt(val)); };
+    d.querySelector(".x").onclick  = ev=>{ ev.stopPropagation(); clearEvent(i); };
+    box.appendChild(d);
+  });
+}
+function status(){
+  const done = S.order.filter(n=>{
+    const r=S.rows.get(n)||{};
+    return S.events.every(e=>r[e]!=="" && r[e]!==undefined);
+  }).length;
+  $("status").textContent = S.order.length
+    ? `${S.order.length} 支影片 · ${done} 支完成${S.dirty?" · 有未匯出變更":""}`
+    : "尚未載入";
+}
+
+/* ---------- 事件繫結 ---------- */
+$("vids").onchange  = e => loadVideos(e.target.files);
+$("vids2").onchange = e => loadVideos(e.target.files);
+$("csv").onchange = e => {
+  const f = e.target.files[0]; if(!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    const {events, rows} = parseCSV(r.result);
+    if(events.length) S.events = events;
+    rows.forEach(o=>{
+      const name = (o.video||"").trim(); if(!name) return;
+      if(!S.order.includes(name)) S.order.push(name);
+      S.rows.set(name, o);
+    });
+    S.order.sort();
+    if(S.idx<0 && S.order.length) select(0); else { renderClips(); renderEvents(); }
+    $("export").disabled = !S.order.length;
+    status();
+  };
+  r.readAsText(f);
+};
+$("export").onclick = ()=>{
+  const text = toCSV();
+  $("out").value = text;
+  const blob = new Blob([text], {type:"text/csv;charset=utf-8"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "annotations.csv";
+  document.body.appendChild(a); a.click(); a.remove();
+  S.dirty = false; $("unsaved").style.display="none"; status();
+};
+$("copy").onclick = async ()=>{
+  if(!$("out").value) $("out").value = toCSV();
+  try{ await navigator.clipboard.writeText($("out").value); $("copy").textContent="已複製"; }
+  catch{ $("out").select(); document.execCommand("copy"); $("copy").textContent="已複製"; }
+  setTimeout(()=>$("copy").textContent="複製到剪貼簿",1200);
+};
+$("scrub").oninput = e => seek(parseInt(e.target.value));
+$("prev1").onclick = ()=>step(-1);  $("next1").onclick = ()=>step(1);
+$("prev10").onclick= ()=>step(-10); $("next10").onclick= ()=>step(10);
+$("play").onclick = ()=>{ if(v.paused){ v.play(); $("play").textContent="暫停"; }
+                          else { v.pause(); $("play").textContent="播放"; seek(v.currentTime*S.fps); } };
+v.onpause = ()=>{ $("play").textContent="播放"; };
+v.ontimeupdate = ()=>{ if(!v.paused){ const f=Math.round(v.currentTime*S.fps);
+  $("fnum").textContent=f; $("scrub").value=f; $("tsec").textContent=(f/S.fps).toFixed(2); } };
+
+window.addEventListener("keydown", e=>{
+  if(e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT") return;
+  const big = e.shiftKey ? 10 : 1;
+  if(e.key === "ArrowLeft"){ step(-big); e.preventDefault(); }
+  else if(e.key === "ArrowRight"){ step(big); e.preventDefault(); }
+  else if(e.key === " "){ $("play").click(); e.preventDefault(); }
+  else if(e.key === "["){ select(S.idx-1); e.preventDefault(); }
+  else if(e.key === "]"){ select(S.idx+1); e.preventDefault(); }
+  else if(e.key === "Backspace"){ clearEvent(S.sel); e.preventDefault(); }
+  else if(/^[1-9]$/.test(e.key)){ const i=parseInt(e.key)-1; if(i<S.events.length){ setEvent(i); e.preventDefault(); } }
+});
+window.addEventListener("beforeunload", e=>{ if(S.dirty){ e.preventDefault(); e.returnValue=""; } });
+</script>
+</body>
+</html>
