@@ -438,8 +438,12 @@ register_sport(
         sport_id="baseball_swing",
         display_name="棒球揮棒",
         # 擊球類的順序與投擲類不同：前腳先落地建立支撐，軀幹才拉到最大分離。
+        # `loading_start` 對應文獻的 lead foot off（跨步開始），是打擊六期分法的
+        # 五個關鍵事件之一：lead foot off → lead foot down → 重心轉移 →
+        # 前腳最大垂直地面反作用力 → 觸球。
         events=(
             "address",
+            "loading_start",
             "stride_foot_contact",
             "loading_peak",
             "pelvis_peak_rotation",
@@ -451,6 +455,16 @@ register_sport(
         ),
         weak_rules=(
             WeakRule("address", "rest_start"),
+            # 前腳離地：前踝高度開始上升，在著地之前
+            WeakRule(
+                "loading_start",
+                "signal_onset",
+                {
+                    "signal": "lead_ankle_height",
+                    "after": "address",
+                    "before": "stride_foot_contact",
+                },
+            ),
             # 拉棒到底：肩髖分離角最大
             WeakRule(
                 "loading_peak",

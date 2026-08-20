@@ -16,6 +16,8 @@
 | `golf_swing` | `datasets/pennaction.py` | Penn Action `golf_swing` | 弱標註 | 123 |
 | `baseball_pitch` | `datasets/pennaction.py` | Penn Action `baseball_pitch` | 弱標註 | 139 |
 | `baseball_swing` | `datasets/pennaction.py` | Penn Action `baseball_swing` | 弱標註 | 110 |
+| 自備影片 | `datasets/local_video.py` | `/srv/datasets/weight` | 弱標註（RTMPose 姿態） | 8 / 12 |
+| 人工標註 | `datasets/annotations.py` | `annotations/*.csv` | **真人**（尚未實際標註） | 0 |
 | `tennis_serve` | `datasets/pennaction.py` | Penn Action `tennis_serve` | 弱標註 | 136 |
 | `tennis_forehand` | `datasets/pennaction.py` | Penn Action `tennis_forehand` | 弱標註 | 107 |
 | `bowling` | `datasets/pennaction.py` | Penn Action `bowl` | 弱標註 | 102 |
@@ -73,6 +75,7 @@ GolfDB 的是估計值。
 | `runs/golf/model.pt` | `golf_swing`，GolfDB 第 1 折 | 高爾夫的主力模型 |
 | `runs/pitch/model.pt` | `baseball_pitch`，Penn Action | `scripts/pitch_analysis.py` |
 | `runs/lift/model.pt` | `clean_and_jerk`，Penn Action | `scripts/lift_analysis.py` |
+| `runs/bat/model.pt` | `baseball_swing`，Penn Action | `docs/batting-analysis.md` |
 
 `runs/` 不納入版控。全部由下列指令重建：
 
@@ -94,6 +97,8 @@ python -m kinetic_chain.cli train --sport clean_and_jerk --no-golfdb \
 | `pitch_analysis.py` | `runs/pitch_analysis.json` | 投球的分期時序與序列是否成立 | `docs/pitch-analysis.md` |
 | `viewpoint_analysis.py` | `runs/viewpoint_analysis.json` | 機位對旋轉量測的影響 | `docs/pitch-analysis.md` |
 | `lift_analysis.py` | `runs/lift_analysis.json` | 舉重的伸展型動力鏈 | `docs/lift-analysis.md` |
+| `lift_analysis.py --source local` | `runs/lift_analysis_local.json` | 自備影片的實測 | `docs/own-video-analysis.md` |
+| `make_annotation_template.py` | `annotations/*.csv` | 預填的人工標註範本 | `docs/own-video-analysis.md` |
 | `plot_accuracy.py` | `docs/figures/*.png` | 各事件的誤差分布 | `README.md` |
 | `visualize.py` | `runs/visualise*/` | 逐格畫面對照（**含人物，不進版控**） | 僅本機 |
 | `visualize_chain.py` | `docs/figures/*.png` | 動力鏈曲線、投影假影 | `docs/pitch-analysis.md` |
@@ -105,5 +110,6 @@ python -m kinetic_chain.cli train --sport clean_and_jerk --no-golfdb \
 | 高爾夫四折 PCE 0.786 | GolfDB 真人標註，1391 段 | **可當結論**，且與 SwingNet 同協定可比 |
 | 各運動 vs 弱標註的 PCE | 規則推導的標註 | 只代表模型學會規則的程度 |
 | 旋轉型序列成立率 | 受投影假影汙染 | **不可當結論**，見 `docs/pitch-analysis.md` |
-| 伸展型序列成立率 42% | 三點夾角，不受該假影影響 | 可當觀察，但無真值可驗證 |
+| 伸展型序列成立率 42%（舉重） | 三點夾角，不受該假影影響 | 可當觀察，但無真值可驗證 |
+| 旋轉型序列成立率（幾何乾淨的片段） | 已排除投影假影 | 可當觀察；跨六個運動一致，見 `docs/batting-analysis.md` |
 | 各階段時間佔比 | 由偵測事件換算 | 相對比例可用，絕對解析度受 30 fps 限制 |
