@@ -141,3 +141,55 @@ liftoff f448、catch f546、overhead f928 與畫面吻合），錯的是模型�
 - 4 支影片仍未通過弱標註；`auto_trim` 對其中兩支框出過短的窗口，未修。
 - 沒有用自備影片重新訓練模型——那需要更多影片。
 - 12 支影片全部是同一種動作型態（clean），沒有抓舉與其他變化。
+
+## 人工標註的格式
+
+目前舉重的事件時間點**全部是程式規則推導的，沒有任何人工標註**——包括本文件的作者
+也沒有逐格標過，只做了抽查。要在自備影片上得到真值就得補這一塊。
+
+格式是**寬表 CSV**，一支影片一列、一個事件一欄，可以直接用試算表編輯：
+
+```csv
+video,attempt,fps,address,clean_liftoff,clean_knee_pass,clean_catch,clean_recovery,clean_jerk_dip,arm_peak_velocity,clean_overhead,finish,note
+IMG_4787,1,59.93,440,451,452,652,731,812,816,879,952,
+IMG_8875,1,42.08,233,236,249,308,,,376,378,382,上挺被槓片遮住
+```
+
+三條規則：
+
+- **影格編號以原始影片為準**（0 起算），不是裁切後的。裁切是衍生的，標註不該綁在上面。
+- **空白不等於 0。** 空白代表「標不出來」（被遮擋、這次動作沒有這個階段），載入時
+  該事件會被遮罩掉；填 0 會被當成「發生在第 0 格」，是完全不同的意思。
+- **想減少階段數就刪掉那幾欄。** 欄位由標題列決定，程式不寫死事件數。
+  欄名必須是 `events.py` 註冊過的 id，打錯直接報錯而不是靜默忽略。
+
+### 不從零開始標
+
+```bash
+python scripts/make_annotation_template.py \
+    --videos /srv/datasets/weight --cache data/cache/own_weight \
+    --sport clean_and_jerk --checkpoint runs/lift/model.pt \
+    --output annotations/weight.csv
+```
+
+會用現有模型把預測**預先填進去**，標註者只改錯的。依實測，頭尾事件
+（起始、離地、過膝、結束）的 PCE 已有 0.75–0.875，那幾欄多半不用動；
+要修的是中段（接槓、站起、上挺預蹲）。同時輸出 `annotations/preview/<video>.jpg`，
+把預測的那幾格排成一列供對照——**該圖含可辨識個人，不進版控**。
+
+只想標少數幾個階段時加 `--events`：
+
+```bash
+--events address clean_liftoff clean_catch clean_overhead finish
+```
+
+### 載入
+
+```python
+from kinetic_chain.datasets import annotations
+clips = annotations.load("annotations/weight.csv", "data/cache/own_weight", "clean_and_jerk")
+```
+
+產出的 `Clip.label_source` 是 `"human"`，與弱標註在所有報表中分開統計。
+載入時會驗證：欄名是註冊過的事件、影格編號落在影片長度內、順序符合該運動宣告的時序。
+任何一項不符直接報錯，不靜默修正。
