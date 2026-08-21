@@ -126,8 +126,20 @@ def trace_figure(clip, events: dict[str, int], path: Path,
     plt.close(fig)
 
 
-def timeline_figure(analyses, path: Path) -> None:
+#: 各運動的動作名稱與終點事件名稱，只影響圖上的文字。
+ACTION_WORDS: dict[str, tuple[str, str]] = {
+    "baseball_pitch": ("pitches", "release"),
+    "baseball_swing": ("swings", "impact"),
+    "golf_swing": ("swings", "impact"),
+    "tennis_serve": ("serves", "contact"),
+    "tennis_forehand": ("strokes", "contact"),
+    "bowling": ("deliveries", "release"),
+}
+
+
+def timeline_figure(analyses, path: Path, sport: str = "baseball_pitch") -> None:
     """全體片段：每個事件在正規化時間軸上的分布。"""
+    action, endpoint = ACTION_WORDS.get(sport, ("actions", "impact"))
     order = [
         "address", "loading_start", "loading_peak", "stride_foot_contact",
         "pelvis_peak_rotation", "torso_peak_rotation", "arm_peak_velocity",
@@ -156,8 +168,8 @@ def timeline_figure(analyses, path: Path) -> None:
     ax.axvline(100, color=MUTED, linewidth=1.0, linestyle="--")
     ax.set_yticks(positions)
     ax.set_yticklabels([e.replace("_", " ") for e in order], fontsize=9)
-    ax.set_xlabel("% of throw  (0 = first event, 100 = release)", color=MUTED, fontsize=9.5)
-    ax.set_title(f"Event timing across {len(analyses)} pitches", color=INK,
+    ax.set_xlabel(f"% of action  (0 = first event, 100 = {endpoint})", color=MUTED, fontsize=9.5)
+    ax.set_title(f"Event timing across {len(analyses)} {action}", color=INK,
                  fontsize=10.5, loc="left", pad=10)
     fig.tight_layout()
     fig.savefig(path, facecolor="white")
@@ -292,7 +304,7 @@ def main() -> int:
     predictions = predict_clips(model, val_clips, device=args.device)
 
     detected = [analyse(c.clip_id, spec, p, c.fps) for c, p in zip(val_clips, predictions)]
-    timeline_figure(detected, args.output_dir / "chain_timeline.png")
+    timeline_figure(detected, args.output_dir / "chain_timeline.png", sport=args.sport)
     separation_figure(clips, args.output_dir / "chain_separation.png")
     projection_artifact_figure(clips, args.output_dir / "projection_artifact.png")
     logger.info("時間分布與分離時間圖 → %s", args.output_dir)

@@ -86,6 +86,8 @@ python -m kinetic_chain.cli train --sport baseball_pitch --no-golfdb \
     --epochs 80 --output runs/pitch
 python -m kinetic_chain.cli train --sport clean_and_jerk --no-golfdb \
     --epochs 80 --output runs/lift
+python -m kinetic_chain.cli train --sport baseball_swing --no-golfdb \
+    --epochs 80 --output runs/bat
 ```
 
 ## 實驗腳本 → 產出 → 文件
@@ -98,6 +100,8 @@ python -m kinetic_chain.cli train --sport clean_and_jerk --no-golfdb \
 | `viewpoint_analysis.py` | `runs/viewpoint_analysis.json` | 機位對旋轉量測的影響 | `docs/pitch-analysis.md` |
 | `lift_analysis.py` | `runs/lift_analysis.json` | 舉重的伸展型動力鏈 | `docs/lift-analysis.md` |
 | `lift_analysis.py --source local` | `runs/lift_analysis_local.json` | 自備影片的實測 | `docs/own-video-analysis.md` |
+| `rotation_chain_by_sport.py` | `runs/rotation_chain_by_sport.json`、`docs/figures/rotation_by_window.png` | 六個旋轉型運動的序列成立率，只看幾何乾淨的片段 | `docs/batting-analysis.md` |
+| `bat_report.py` | `runs/bat_report.json` | 打者驗證集的逐段偵測結果 | `docs/batting-analysis.md` |
 | `make_annotation_template.py` | `annotations/*.csv` | 預填的人工標註範本 | `docs/own-video-analysis.md` |
 | `plot_accuracy.py` | `docs/figures/*.png` | 各事件的誤差分布 | `README.md` |
 | `visualize.py` | `runs/visualise*/` | 逐格畫面對照（**含人物，不進版控**） | 僅本機 |
@@ -112,4 +116,5 @@ python -m kinetic_chain.cli train --sport clean_and_jerk --no-golfdb \
 | 旋轉型序列成立率 | 受投影假影汙染 | **不可當結論**，見 `docs/pitch-analysis.md` |
 | 伸展型序列成立率 42%（舉重） | 三點夾角，不受該假影影響 | 可當觀察，但無真值可驗證 |
 | 旋轉型序列成立率（幾何乾淨的片段） | 已排除投影假影 | 可當觀察；跨六個運動一致，見 `docs/batting-analysis.md` |
+| 窗長與成立率的相關 `r = +0.72` | 只有六個點，p = 0.108 | **不可當結論**，只是目前最合理的解釋 |
 | 各階段時間佔比 | 由偵測事件換算 | 相對比例可用，絕對解析度受 30 fps 限制 |
