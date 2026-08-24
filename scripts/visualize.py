@@ -27,6 +27,10 @@ from kinetic_chain.train import load_checkpoint
 logger = logging.getLogger("visualize")
 
 TILE = 160
+#: 裁切模式的圖磚。直立的，因為運動員是站著的——正方形框在 16:9 的影格上
+#: 一定會超出上下邊界，補出來的黑邊會佔掉一半版面。
+CROP_TILE_W = 150
+CROP_TILE_H = 250
 LABEL_HEIGHT = 34
 ROW_LABEL_WIDTH = 52
 
@@ -75,6 +79,45 @@ def read_frames(source: Path, indices: list[int]) -> dict[int, np.ndarray]:
     return frames
 
 
+def athlete_box(
+    pose: np.ndarray, aspect: float, margin: float = 0.18
+) -> tuple[int, int, int, int]:
+    """整段共用的裁切框 ``(x0, y0, x1, y1)``，長寬比為 ``aspect``（寬/高）。
+
+    整段共用一個框而不是逐格重算：框跟著人跑的話，畫面之間的位移就看不出來了，
+    而位移正是要檢查的東西。框住的是整段所有影格的關節範圍，不是單一格的。
+
+    ``margin`` 是相對於人體框的留白比例。留一點才看得到球棒與落點。
+    """
+    joints = pose[pose[:, :, 2] > 0]
+    x0, y0 = joints[:, 0].min(), joints[:, 1].min()
+    x1, y1 = joints[:, 0].max(), joints[:, 1].max()
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    half_h = max(y1 - y0, (x1 - x0) / aspect) * (0.5 + margin)
+    half_w = half_h * aspect
+    return int(cx - half_w), int(cy - half_h), int(cx + half_w), int(cy + half_h)
+
+
+def crop_tile(
+    frame: np.ndarray, box: tuple[int, int, int, int], width: int, height: int
+) -> np.ndarray:
+    """依 ``box`` 裁切並縮放成 ``width`` × ``height``。
+
+    超出畫面的部分補黑，而不是把框夾回邊界——夾回去會讓框變形，
+    人在畫面裡的相對位置就跟著跑掉，各欄之間也不再可比。
+    """
+    import cv2
+
+    x0, y0, x1, y1 = box
+    frame_height, frame_width = frame.shape[:2]
+    canvas = np.zeros((y1 - y0, x1 - x0, 3), dtype=frame.dtype)
+    sx0, sy0 = max(x0, 0), max(y0, 0)
+    sx1, sy1 = min(x1, frame_width), min(y1, frame_height)
+    if sx1 > sx0 and sy1 > sy0:
+        canvas[sy0 - y0 : sy1 - y0, sx0 - x0 : sx1 - x0] = frame[sy0:sy1, sx0:sx1]
+    return cv2.resize(canvas, (width, height))
+
+
 def _short(event: str) -> str:
     """把事件 id 縮成放得進 160 px 的標籤。"""
     return (
@@ -97,6 +140,7 @@ def build_sheet(
     truth: dict[str, int] | None,
     tol: int,
     reference_label: str = "true",
+    box: tuple[int, int, int, int] | None = None,
 ) -> np.ndarray:
     """一列預測、一列參照，欄位對齊同一個事件。
 
@@ -105,17 +149,18 @@ def build_sheet(
     """
     import cv2
 
+    tile_w, tile_h = (TILE, TILE) if box is None else (CROP_TILE_W, CROP_TILE_H)
     rows = 2 if truth else 1
     indices = list(predicted.values()) + (list(truth.values()) if truth else [])
     frames = read_frames(video, indices)
-    blank = np.full((TILE, TILE, 3), 60, dtype=np.uint8)
+    blank = np.full((tile_h, tile_w, 3), 60, dtype=np.uint8)
 
-    width = ROW_LABEL_WIDTH + TILE * len(events)
-    height = LABEL_HEIGHT + rows * (TILE + LABEL_HEIGHT)
+    width = ROW_LABEL_WIDTH + tile_w * len(events)
+    height = LABEL_HEIGHT + rows * (tile_h + LABEL_HEIGHT)
     sheet = np.full((height, width, 3), BACKGROUND, dtype=np.uint8)
 
     for column, event in enumerate(events):
-        x = ROW_LABEL_WIDTH + column * TILE
+        x = ROW_LABEL_WIDTH + column * tile_w
         cv2.putText(
             sheet, _short(event)[:19], (x + 4, 22),
             cv2.FONT_HERSHEY_SIMPLEX, 0.42, WHITE, 1, cv2.LINE_AA,
@@ -124,18 +169,22 @@ def build_sheet(
     for row in range(rows):
         source = predicted if row == 0 else truth
         assert source is not None
-        y = LABEL_HEIGHT + row * (TILE + LABEL_HEIGHT)
+        y = LABEL_HEIGHT + row * (tile_h + LABEL_HEIGHT)
         cv2.putText(
-            sheet, "pred" if row == 0 else reference_label, (6, y + TILE // 2),
+            sheet, "pred" if row == 0 else reference_label, (6, y + tile_h // 2),
             cv2.FONT_HERSHEY_SIMPLEX, 0.45, GREY, 1, cv2.LINE_AA,
         )
         for column, event in enumerate(events):
-            x = ROW_LABEL_WIDTH + column * TILE
+            x = ROW_LABEL_WIDTH + column * tile_w
             frame = frames.get(source[event])
             if frame is None:
-                sheet[y : y + TILE, x : x + TILE] = blank
+                sheet[y : y + tile_h, x : x + tile_w] = blank
             else:
-                sheet[y : y + TILE, x : x + TILE] = cv2.resize(frame, (TILE, TILE))
+                sheet[y : y + tile_h, x : x + tile_w] = (
+                    cv2.resize(frame, (tile_w, tile_h))
+                    if box is None
+                    else crop_tile(frame, box, tile_w, tile_h)
+                )
 
             caption = f"f{source[event]}"
             colour = WHITE
@@ -144,7 +193,7 @@ def build_sheet(
                 colour = HIT if delta <= tol else MISS
                 caption = f"f{source[event]}  d={delta}"
             cv2.putText(
-                sheet, caption, (x + 4, y + TILE + 22),
+                sheet, caption, (x + 4, y + tile_h + 22),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, colour, 1, cv2.LINE_AA,
             )
     return sheet
@@ -165,6 +214,11 @@ def main() -> int:
     parser.add_argument("--count", type=int, default=4)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--output-dir", type=Path, default=Path("runs/visualise"))
+    parser.add_argument(
+        "--crop",
+        action="store_true",
+        help="裁切到運動員周圍，整段共用一個框。人在畫面裡很小時（Penn Action 常見）才看得清楚。",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -225,6 +279,7 @@ def main() -> int:
         sheet = build_sheet(
             media, list(clip.ordered_events), prediction, clip.events, tol,
             reference_label=reference_label,
+            box=athlete_box(clip.pose, CROP_TILE_W / CROP_TILE_H) if args.crop else None,
         )
         written += 1
         path = args.output_dir / f"{label}_{clip_number}.png"

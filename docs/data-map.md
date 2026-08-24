@@ -110,7 +110,7 @@ python -m kinetic_chain.cli train --sport baseball_swing --no-golfdb \
 | `visualize_poses.py` | `runs/poses/*.png` | 每個事件那一格的骨架姿勢（**只有關節，不含影像，可進版控**） | `docs/batting-analysis.md` |
 | `make_annotation_template.py` | `annotations/*.csv` | 預填的人工標註範本 | `docs/own-video-analysis.md` |
 | `plot_accuracy.py` | `docs/figures/*.png` | 各事件的誤差分布 | `README.md` |
-| `visualize.py` | `runs/visualise*/` | 逐格畫面對照（**含人物，不進版控**） | 僅本機 |
+| `visualize.py` | `runs/visualise*/` | 逐格畫面對照（**含人物，不進版控**）；`--crop` 裁到運動員周圍 | 僅本機 |
 | `visualize_chain.py` | `docs/figures/*.png` | 動力鏈曲線、投影假影 | `docs/pitch-analysis.md` |
 
 ## 哪些數字可以當結論
@@ -125,3 +125,4 @@ python -m kinetic_chain.cli train --sport baseball_swing --no-golfdb \
 | 窗長與成立率的相關 `r = +0.72` | 只有六個點，p = 0.108 | **不可當結論**，只是目前最合理的解釋 |
 | 各階段時間佔比 | 由偵測事件換算 | 相對比例可用，絕對解析度受 30 fps 限制 |
 | 打者 `arm_peak_velocity` PCE 0.818 | 該格手腕有 19% 是內插補值 | 可當觀察，但不是全部量到的 |
+| 打者 `pelvis_peak_rotation` / `torso_peak_rotation` 的偵測值 | 弱標註只有 33% / 37% 落在真峰值上 | **不可用**，弱標註已知標錯，見 `docs/batting-analysis.md` |
