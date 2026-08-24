@@ -16,3 +16,6 @@ dist/
 
 # 標註檔本身要進版控，但核對用的縮圖含可辨識個人，不進
 annotations/preview/
+
+# 實驗圖片總表：含可辨識個人的影像，由 scripts/build_gallery.py 重建
+gallery/

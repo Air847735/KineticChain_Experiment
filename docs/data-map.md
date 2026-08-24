@@ -112,6 +112,7 @@ python -m kinetic_chain.cli train --sport baseball_swing --no-golfdb \
 | `failure_modes.py` | `runs/failure_modes.json` | 大錯集中在整段還是特定事件 | `docs/architecture.md` S7 |
 | `rule_type_errors.py` | `runs/rule_type_errors.json` | 誤差是否隨弱標註規則的種類而不同 | `docs/architecture.md` S7 |
 | `label_vs_data.py` | `runs/label_vs_data.json` | 把高爾夫降到 88 段，分離「資料量」與「標註品質」 | `docs/architecture.md` S7 |
+| `build_gallery.py` | `gallery/`（含 `INDEX.md`） | 把所有實驗圖片整理成一個可比對的資料夾（**含人物，不進版控**） | 僅本機 |
 | `make_annotation_template.py` | `annotations/*.csv` | 預填的人工標註範本 | `docs/own-video-analysis.md` |
 | `plot_accuracy.py` | `docs/figures/*.png` | 各事件的誤差分布 | `README.md` |
 | `visualize.py` | `runs/visualise*/` | 逐格畫面對照（**含人物，不進版控**）；`--crop` 裁到運動員周圍 | 僅本機 |
