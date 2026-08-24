@@ -31,6 +31,10 @@ _R_KNEE = JOINT_INDEX["right_knee"]
 _L_ANKLE = JOINT_INDEX["left_ankle"]
 _R_ANKLE = JOINT_INDEX["right_ankle"]
 
+#: 關鍵點信心低於此值時視為未量到，沿時間軸內插補值。
+#: 匯出成常數是為了讓視覺化能標出哪些關節是補出來的，不必重複這個字面值。
+MIN_CONFIDENCE = 0.3
+
 #: 特徵矩陣的欄位名稱，順序即欄位順序。
 FEATURE_NAMES: tuple[str, ...] = (
     *(
@@ -177,7 +181,7 @@ def normalize(
     pose: np.ndarray,
     *,
     handedness_sensitive: bool = True,
-    min_confidence: float = 0.3,
+    min_confidence: float = MIN_CONFIDENCE,
 ) -> tuple[np.ndarray, float, bool, str, float]:
     """把 canonical 關鍵點序列正規化成尺度、位置與慣用邊無關的座標。
 
@@ -261,7 +265,7 @@ def compute(
     fps: float,
     *,
     handedness_sensitive: bool = True,
-    min_confidence: float = 0.3,
+    min_confidence: float = MIN_CONFIDENCE,
 ) -> PoseSignals:
     """由 canonical 關鍵點序列算出正規化姿態與全部一維訊號。
 

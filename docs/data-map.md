@@ -44,6 +44,11 @@ Penn Action 的關節是**人工標註**，不需要跑姿態抽取；GolfDB 只
 RTMPose 抽出後快取。所以兩者的姿態品質不是同一回事——Penn Action 的關節是真值，
 GolfDB 的是估計值。
 
+但 Penn Action 的「真值」有缺口：**15.5% 的關節標為不可見**（打擊項目的全體平均
+可見率 84.5%）。這些關節在 `features.compute` 中沿時間軸內插補值，模型看到的是補過的
+姿勢。`scripts/visualize_poses.py` 會把補值的關節畫成空心點，避免把補出來的位置
+當成量到的位置。
+
 ## 事件詞彙的分配
 
 | | 數量 | 說明 |
@@ -102,6 +107,7 @@ python -m kinetic_chain.cli train --sport baseball_swing --no-golfdb \
 | `lift_analysis.py --source local` | `runs/lift_analysis_local.json` | 自備影片的實測 | `docs/own-video-analysis.md` |
 | `rotation_chain_by_sport.py` | `runs/rotation_chain_by_sport.json`、`docs/figures/rotation_by_window.png` | 六個旋轉型運動的序列成立率，只看幾何乾淨的片段 | `docs/batting-analysis.md` |
 | `bat_report.py` | `runs/bat_report.json` | 打者驗證集的逐段偵測結果 | `docs/batting-analysis.md` |
+| `visualize_poses.py` | `runs/poses/*.png` | 每個事件那一格的骨架姿勢（**只有關節，不含影像，可進版控**） | `docs/batting-analysis.md` |
 | `make_annotation_template.py` | `annotations/*.csv` | 預填的人工標註範本 | `docs/own-video-analysis.md` |
 | `plot_accuracy.py` | `docs/figures/*.png` | 各事件的誤差分布 | `README.md` |
 | `visualize.py` | `runs/visualise*/` | 逐格畫面對照（**含人物，不進版控**） | 僅本機 |
@@ -118,3 +124,4 @@ python -m kinetic_chain.cli train --sport baseball_swing --no-golfdb \
 | 旋轉型序列成立率（幾何乾淨的片段） | 已排除投影假影 | 可當觀察；跨六個運動一致，見 `docs/batting-analysis.md` |
 | 窗長與成立率的相關 `r = +0.72` | 只有六個點，p = 0.108 | **不可當結論**，只是目前最合理的解釋 |
 | 各階段時間佔比 | 由偵測事件換算 | 相對比例可用，絕對解析度受 30 fps 限制 |
+| 打者 `arm_peak_velocity` PCE 0.818 | 該格手腕有 19% 是內插補值 | 可當觀察，但不是全部量到的 |
