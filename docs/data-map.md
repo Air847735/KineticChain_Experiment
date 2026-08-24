@@ -108,6 +108,10 @@ python -m kinetic_chain.cli train --sport baseball_swing --no-golfdb \
 | `rotation_chain_by_sport.py` | `runs/rotation_chain_by_sport.json`、`docs/figures/rotation_by_window.png` | 六個旋轉型運動的序列成立率，只看幾何乾淨的片段 | `docs/batting-analysis.md` |
 | `bat_report.py` | `runs/bat_report.json` | 打者驗證集的逐段偵測結果 | `docs/batting-analysis.md` |
 | `visualize_poses.py` | `runs/poses/*.png` | 每個事件那一格的骨架姿勢（**只有關節，不含影像，可進版控**） | `docs/batting-analysis.md` |
+| `error_budget.py` | `runs/error_budget.json` | 跨運動的誤差（影格／毫秒／固定容忍度），PCE 不可跨運動比較 | `docs/architecture.md` S7 |
+| `failure_modes.py` | `runs/failure_modes.json` | 大錯集中在整段還是特定事件 | `docs/architecture.md` S7 |
+| `rule_type_errors.py` | `runs/rule_type_errors.json` | 誤差是否隨弱標註規則的種類而不同 | `docs/architecture.md` S7 |
+| `label_vs_data.py` | `runs/label_vs_data.json` | 把高爾夫降到 88 段，分離「資料量」與「標註品質」 | `docs/architecture.md` S7 |
 | `make_annotation_template.py` | `annotations/*.csv` | 預填的人工標註範本 | `docs/own-video-analysis.md` |
 | `plot_accuracy.py` | `docs/figures/*.png` | 各事件的誤差分布 | `README.md` |
 | `visualize.py` | `runs/visualise*/` | 逐格畫面對照（**含人物，不進版控**）；`--crop` 裁到運動員周圍 | 僅本機 |
@@ -119,6 +123,7 @@ python -m kinetic_chain.cli train --sport baseball_swing --no-golfdb \
 |---|---|---|
 | 高爾夫四折 PCE 0.786 | GolfDB 真人標註，1391 段 | **可當結論**，且與 SwingNet 同協定可比 |
 | 各運動 vs 弱標註的 PCE | 規則推導的標註 | 只代表模型學會規則的程度 |
+| **跨運動比較 PCE** | 容忍度隨動作長度變動（1.0 到 9.7 影格） | **不可比**，必須改用固定容忍度或毫秒，見 `docs/architecture.md` S7 |
 | 旋轉型序列成立率 | 受投影假影汙染 | **不可當結論**，見 `docs/pitch-analysis.md` |
 | 伸展型序列成立率 42%（舉重） | 三點夾角，不受該假影影響 | 可當觀察，但無真值可驗證 |
 | 旋轉型序列成立率（幾何乾淨的片段） | 已排除投影假影 | 可當觀察；跨六個運動一致，見 `docs/batting-analysis.md` |
