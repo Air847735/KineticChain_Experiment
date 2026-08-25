@@ -1,16 +1,27 @@
 # Architecture and Design
 
 - Requirements source: `docs/spec.md`
-- Last updated: 2026-08-19
-- Status: 實作完成，110 個單元測試通過。量化實驗結果見 Verification and Experiments。
+- Last updated: 2026-08-25
+- Status: 實作完成，118 個單元測試通過。量化實驗結果見 Verification and Experiments。
 
 ## Overview
 
-管線分四段，前三段確定性、只有第三段有學習參數：
+管線分四段，只有第三段有學習參數；其餘三段是確定性計算，可以單獨單元測試。
 
-```
-影片 ──► 姿態抽取 ──► 力學特徵 ──► sport-conditioned 時序模型 ──► 順序約束解碼 ──► 事件時間點
-        (RTMPose)     (確定性)        (唯一有參數的部分)          (確定性 DP)
+```mermaid
+flowchart TB
+    V["影片<br/>T 格 RGB"]
+    P["1 · 姿態抽取<br/>RTMPose ONNX<br/>（唯一碰影像的一段）"]
+    K["關鍵點<br/>(T, 13, 3)"]
+    F["2 · 力學特徵<br/>正規化 → 平滑 → 差分<br/>（確定性）"]
+    X["特徵矩陣<br/>(T, 58)"]
+    M["3 · 模型<br/>KineticChainNet<br/>554,739 參數"]
+    L["逐格 logits<br/>(19, T)"]
+    D["4 · 解碼<br/>順序約束動態規劃<br/>（確定性 · 無參數）"]
+    O["事件影格 + 信心<br/>{事件: 第幾格}"]
+    V --> P --> K --> F --> X --> M --> L --> D --> O
+    S(["運動項目 id"]) -. "FiLM 條件" .-> M
+    S -. "選出該運動的事件槽與順序" .-> D
 ```
 
 設計的核心主張：**運動項目的差異放在資料與宣告式設定，不放在模型結構與程式碼**。
@@ -23,34 +34,105 @@
 
 ## Repository Map
 
+### 核心套件
+
+| 模組 | 行數 | 責任 |
+|---|---:|---|
+| `events.py` | 662 | 事件詞彙、`SportSpec` 註冊表、順序約束。**新增運動的唯一入口** |
+| `skeleton.py` | 160 | 關鍵點布局與跨布局對映（`coco17` / `penn13` / `canonical13`） |
+| `features.py` | 407 | 姿態序列 → 58 維力學特徵 `(T, 58)` |
+| `weak_labels.py` | 344 | 由力學訊號推導 canonical 事件（**弱標註**，非真值） |
+| `model.py` | 227 | `KineticChainNet`：dilated TCN + FiLM 條件 + 共用事件頭 |
+| `decode.py` | 110 | 順序約束動態規劃解碼，無參數 |
+| `metrics.py` | 152 | PCE 與容忍度 |
+| `analysis.py` | 361 | 動力鏈時序指標、投影品質診斷 |
+| `data.py` | 247 | `Clip` 記錄、批次組裝、遮罩 |
+| `errors.py` | 35 | 例外階層，全部繼承 `KineticChainError` |
+
+### 邊界層（可以匯入推論後端）
+
+| 模組 | 行數 | 責任 |
+|---|---:|---|
+| `pose.py` | 244 | RTMPose 抽取（rtmlib/ONNX），輸出 `(T, J, 3)`；含多人選取 |
+| `infer.py` | 164 | 單支影片端到端推論 |
+| `train.py` | 337 | 訓練迴圈 |
+| `evaluate.py` | 120 | 評估 |
+| `cli.py` | 261 | 命令列進入點 |
+
+### 資料集轉接層 `datasets/`
+
+| 模組 | 行數 | 來源 | 標註 |
+|---|---:|---|---|
+| `golfdb.py` | 214 | GolfDB `golfDB.pkl` + 影片 | **真人**，8 事件 |
+| `pennaction.py` | 193 | Penn Action `.mat` 關節標註 | 弱標註 |
+| `local_video.py` | 211 | 自備影片目錄 | 弱標註（需先抽姿態） |
+| `annotations.py` | 194 | `annotations/*.csv` | **真人**（目前 0 段） |
+
+### 其他目錄
+
+| 路徑 | 內容 | 版控 |
+|---|---|---|
+| `scripts/` | 17 支實驗與視覺化腳本，見 `docs/data-map.md` | 是 |
+| `tools/annotator.html` | 瀏覽器人工標註工具，無外部相依 | 是 |
+| `tests/` | 118 個測試，不需 GPU／資料集／網路 | 是 |
+| `docs/` | spec、architecture、data-map、四份分析報告 | 是 |
+| `annotations/` | 人工標註 CSV | 是（`preview/` 除外） |
+| `data/` | 資料集與姿態快取 | 否 |
+| `runs/` | 訓練輸出與實驗結果 | 否 |
+| `gallery/` | 實驗圖片總表（含人物影像） | 否 |
+
+### 模組相依
+
+核心層不得使用 `rtmlib`、`cv2` 或任何推論後端——模型必須能在只有 numpy 的環境下訓練與測試。
+
+分層由上往下相依（上層匯入下層），同層之間不互相匯入。圖刻意做窄以免在 GitHub 上被縮小，
+逐模組的細節看下面的表。
+
+```mermaid
+flowchart TB
+    L1["詞彙層<br/>events · skeleton · errors"]
+    L2["訊號層<br/>features · weak_labels"]
+    L3["資料層<br/>data（Clip · collate · 遮罩）"]
+    L4["學習層<br/>model · decode · metrics"]
+    L5["流程層<br/>train · evaluate · analysis"]
+    L6["入口層<br/>cli · infer"]
+    L1 --> L2 --> L3 --> L4 --> L5 --> L6
+    ADAPT["資料集轉接<br/>golfdb · pennaction<br/>local_video · annotations"] --> L3
+    POSE["pose<br/>RTMPose ONNX"] --> ADAPT
+    POSE --> L6
+    L1 -.-> ADAPT
+    class POSE,ADAPT edge
+    classDef edge stroke-dasharray: 4 3
 ```
-src/kinetic_chain/
-  events.py          事件詞彙、SportSpec 註冊表、順序約束
-  pose.py            RTMPose 抽取（rtmlib/ONNX），輸出 (T, J, 3)
-  skeleton.py        關鍵點布局定義與跨布局對映（COCO-17 / Penn Action-13）
-  features.py        姿態序列 → 力學特徵矩陣 (T, F)
-  weak_labels.py     由力學訊號程式化推導 canonical 事件（弱標註）
-  model.py           KineticChainNet：TCN 骨幹 + FiLM 條件 + 共用事件頭
-  decode.py          順序約束 Viterbi 解碼
-  metrics.py         PCE 與容忍度定義
-  data.py            Clip 記錄、資料集介面、批次組裝
-  datasets/
-    golfdb.py        GolfDB 轉接（真人標註）
-    pennaction.py    Penn Action 轉接（弱標註）
-  analysis.py        動力鏈時序指標、投影品質診斷
-  train.py           訓練迴圈
-  evaluate.py        評估
-  infer.py           單支影片端到端推論
-  cli.py             命令列進入點
-  errors.py          例外階層，全部繼承 KineticChainError
-scripts/
-  run_experiments.py 四折對照實驗（單運動 / 聯合 / 微調），結果寫成 JSON
-  data_efficiency.py 標註量 vs 準確度曲線，從頭訓練 vs 微調
-tests/               單元測試（不需 GPU、不需資料集、不需網路）
-data/                資料集與快取，不納入版控
-runs/                訓練輸出與實驗結果，不納入版控
-docs/                spec.md, architecture.md
-```
+
+`pose.py` 是**唯一使用** `cv2` / `rtmlib` 的模組，而且是在函式內部延遲匯入，不在模組頂層。
+因此 `import kinetic_chain.pose` 本身不會拉進任何影像後端，`pytest` 不需要 GPU、
+資料集或網路就能跑完 118 個測試。四個資料集轉接模組裡有三個匯入 `pose`（讀姿態快取或
+即時抽取），但同樣不會連帶拉進後端。
+
+實際的模組相依（由 AST 抽出，非人工維護）：
+
+| 模組 | 匯入的專案內模組 | 外部後端 |
+|---|---|---|
+| `errors` | — | |
+| `metrics` | — | |
+| `decode` | `errors` | |
+| `skeleton` | `errors` | |
+| `events` | `errors` | |
+| `features` | `errors`, `skeleton` | |
+| `weak_labels` | `errors`, `events`, `features` | |
+| `data` | `errors`, `events`, `features` | |
+| `model` | `events`, `features` | |
+| `analysis` | `events`, `features`, `skeleton` | |
+| `evaluate` | `data`, `decode`, `metrics`, `model` | |
+| `train` | `data`, `errors`, `evaluate`, `events`, `model` | |
+| `pose` | `errors` | **`cv2`**, **`rtmlib`**（函式內延遲匯入） |
+| `infer` | `decode`, `errors`, `events`, `features`, `model`, `pose`, `skeleton` | |
+| `cli` | `data`, `datasets`, `errors`, `evaluate`, `events`, `infer`, `model`, `train` | |
+| `datasets/golfdb` | `data`, `errors`, `pose`, `skeleton` | |
+| `datasets/pennaction` | `data`, `errors`, `events`, `features`, `skeleton`, `weak_labels` | |
+| `datasets/local_video` | 上列全部 + `pose` | |
+| `datasets/annotations` | `data`, `errors`, `events`, `features`, `pose`, `skeleton` | |
 
 ## Components and Responsibilities
 
@@ -110,6 +192,42 @@ class Clip:
 5. 訓練：對每個 active event 槽，在時間軸上做 softmax，與高斯軟目標算 KL
 6. 推論：`decode.decode(logits, spec.slots)` → `(frames, confidence)`
 
+訓練與推論共用第 1 到第 4 步；差別在於**標註從哪裡來**，以及第 5 步之後往哪走。
+
+```mermaid
+flowchart TB
+    subgraph TRAIN["訓練"]
+        direction TB
+        DS["資料集轉接<br/>golfdb / pennaction / local_video / annotations"]
+        CLIP["Clip<br/>pose + events + label_source"]
+        CO["collate<br/>padding + 三種遮罩"]
+        NET1["KineticChainNet"]
+        SOFT["高斯軟目標 σ=0.05 秒<br/>時間軸 softmax → KL"]
+        UPD["反向傳播"]
+        DS --> CLIP --> CO --> NET1 --> SOFT --> UPD
+        UPD -. "更新權重" .-> NET1
+    end
+    subgraph INFER["推論"]
+        direction TB
+        VID["單支影片"]
+        POSE["pose.extract_video<br/>最大人物 × 時序連續性"]
+        FEAT["features.compute"]
+        NET2["KineticChainNet<br/>（載入該運動的權重）"]
+        DEC["decode<br/>順序約束 DP"]
+        RES["事件影格 + 信心"]
+        VID --> POSE --> FEAT --> NET2 --> DEC --> RES
+    end
+    UPD ==> |"runs/&lt;sport&gt;/model.pt"| NET2
+```
+
+三種遮罩各自解決一件事，缺一不可：
+
+| 遮罩 | 形狀 | 解決什麼 |
+|---|---|---|
+| `frame_mask` | `(B, T)` | 批次內片段長度不同，padding 位置的 logits 填 $-\infty$ |
+| `event_mask` | `(B, E)` | 每個運動只用 19 個槽中的一部分，未宣告的槽不參與 loss 與解碼 |
+| 高斯軟目標 | `(B, E, T)` | 事件時間點本身有標註誤差，硬 one-hot 會逼模型過度自信 |
+
 ## Algorithm Design
 
 ### Problem Definition
@@ -145,10 +263,50 @@ Canonical（跨運動共用輸出槽，力學定義相同）：
 | `follow_through_mid` | 隨勢動作中點 |
 | `finish` | 動作結束的靜止姿勢 |
 
-Sport-specific（單一運動專屬，不遷移）：`golf_toe_up`, `golf_mid_backswing`,
-`golf_mid_downswing`。
+Sport-specific（單一運動專屬，不遷移）：
+
+| id | 所屬運動 | 定義 |
+|---|---|---|
+| `golf_toe_up` | `golf_swing` | 上桿至桿身水平、桿頭朝上 |
+| `golf_mid_backswing` | `golf_swing` | 上桿中段 |
+| `golf_mid_downswing` | `golf_swing` | 下桿中段 |
+| `clean_liftoff` | `clean_and_jerk` | 槓鈴離地 |
+| `clean_knee_pass` | `clean_and_jerk` | 槓鈴通過膝關節高度 |
+| `clean_catch` | `clean_and_jerk` | 接槓（前蹲最低點） |
+| `clean_recovery` | `clean_and_jerk` | 由前蹲站起完成 |
+| `clean_jerk_dip` | `clean_and_jerk` | 挺舉前的預蹲最低點 |
+| `clean_overhead` | `clean_and_jerk` | 槓鈴穩定於頭頂 |
 
 模型輸出頭大小 $E = 10 + 9 = 19$，所有運動共用（3 個高爾夫專屬 + 6 個舉重專屬）。
+
+### 已註冊運動項目
+
+七個運動，`sport_index` 即 embedding 索引（依 id 字母排序，必須穩定）。
+
+| idx | sport_id | 顯示名 | 事件數 | canonical | 專屬 | 鏡射 | 資料來源 |
+|---:|---|---|---:|---:|---:|:---:|---|
+| 0 | `baseball_pitch` | 棒球投球 | 10 | 10 | 0 | 是 | Penn Action |
+| 1 | `baseball_swing` | 棒球揮棒 | 10 | 10 | 0 | 是 | Penn Action |
+| 2 | `bowling` | 保齡球 | 10 | 10 | 0 | 是 | Penn Action |
+| 3 | `clean_and_jerk` | 舉重挺舉 | 9 | 3 | 6 | 否 | Penn Action、自備影片 |
+| 4 | `golf_swing` | 高爾夫揮桿 | 11 | 8 | 3 | 是 | **GolfDB（真人）**、Penn Action |
+| 5 | `tennis_forehand` | 網球正手拍 | 9 | 9 | 0 | 是 | Penn Action |
+| 6 | `tennis_serve` | 網球發球 | 9 | 9 | 0 | 是 | Penn Action |
+
+各運動的事件序列（依時序，`*` 為運動專屬）：
+
+| 運動 | 事件序列 |
+|---|---|
+| `baseball_pitch` | address → loading_start → loading_peak → stride_foot_contact → pelvis_peak → torso_peak → arm_peak → release_impact → follow_through_mid → finish |
+| `baseball_swing` | address → loading_start → **stride_foot_contact → loading_peak** → pelvis_peak → torso_peak → arm_peak → release_impact → follow_through_mid → finish |
+| `bowling` | address → loading_start → loading_peak → stride_foot_contact → pelvis_peak → torso_peak → arm_peak → release_impact → follow_through_mid → finish |
+| `clean_and_jerk` | address → clean_liftoff\* → clean_knee_pass\* → clean_catch\* → clean_recovery\* → clean_jerk_dip\* → arm_peak → clean_overhead\* → finish |
+| `golf_swing` | address → golf_toe_up\* → golf_mid_backswing\* → loading_peak → golf_mid_downswing\* → pelvis_peak → torso_peak → arm_peak → release_impact → follow_through_mid → finish |
+| `tennis_forehand` | address → stride_foot_contact → loading_peak → pelvis_peak → torso_peak → arm_peak → release_impact → follow_through_mid → finish |
+| `tennis_serve` | address → loading_start → loading_peak → pelvis_peak → torso_peak → arm_peak → release_impact → follow_through_mid → finish |
+
+粗體標出投擲類與擊球類的順序分歧，見下一小節。`baseball_swing` 的
+`loading_start` 對應文獻的 lead foot off。
 
 #### Canonical 詞彙的適用邊界
 
@@ -609,7 +767,7 @@ SwingNet 的數字取自論文與作者 repo，未在本機重跑。
 
 | 項目 | 狀態 |
 |---|---|
-| 單元測試（86 項） | 通過，不需 GPU／資料集／網路 |
+| 單元測試（118 項） | 通過，不需 GPU／資料集／網路 |
 | GolfDB 四折 PCE | 已執行，見上表 |
 | S4 對照與隔離實驗 | 已執行，S4 未達成 |
 | S6 微調 vs 從頭訓練（六個資料量 × 四折） | 已執行，S6 未達成 |
@@ -670,7 +828,7 @@ sport embedding 若只拼在輸入特徵上，經過 6 層卷積後影響會被�
 ### TCN 而非 Transformer
 
 - 事件定位需要的是精確的局部時間解析度加上足夠的全域脈絡。dilated TCN 以 6 層取得
-  約 ±190 影格的感受野，同時保持逐影格的解析度。
+  約 ±252 影格（雙向 505）的感受野，同時保持逐影格的解析度。
 - 資料量小（GolfDB 1400 片段 + Penn Action 數百片段），Transformer 的資料需求不匹配。
 - 因果性不需要（離線分析），故用非因果（雙向）卷積。
 

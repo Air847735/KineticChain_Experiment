@@ -65,12 +65,36 @@ convolution）。一般卷積像拿一個小窗戶在時間軸上滑動，窗戶
 代表它學會了規則。而且已經查出規則確實有錯——骨盆與軀幹的峰值只有 33% 與 37% 標在訊號
 真正的最大值上，見 `docs/batting-analysis.md`。
 
+## 目前支援的運動項目
+
+七個。`idx` 是 embedding 索引（依 id 字母排序，必須穩定）。`python -m kinetic_chain.cli sports`
+可以在本機列出同一份資料。
+
+| idx | sport_id | 中文 | 事件數 | canonical | 專屬 | 鏡射 | 標註來源 |
+|---:|---|---|---:|---:|---:|:---:|---|
+| 0 | `baseball_pitch` | 棒球投球 | 10 | 10 | 0 | 是 | 弱標註 |
+| 1 | `baseball_swing` | 棒球揮棒 | 10 | 10 | 0 | 是 | 弱標註 |
+| 2 | `bowling` | 保齡球 | 10 | 10 | 0 | 是 | 弱標註 |
+| 3 | `clean_and_jerk` | 舉重挺舉 | 9 | 3 | 6 | 否 | 弱標註 |
+| 4 | `golf_swing` | 高爾夫揮桿 | 11 | 8 | 3 | 是 | **真人**（GolfDB）+ 弱標註 |
+| 5 | `tennis_forehand` | 網球正手拍 | 9 | 9 | 0 | 是 | 弱標註 |
+| 6 | `tennis_serve` | 網球發球 | 9 | 9 | 0 | 是 | 弱標註 |
+
+**只有高爾夫有真人標註。** 其餘六個運動的事件時間點是由力學規則從關節訊號推導的
+（弱標註），不是真值——模型在上面拿高分只代表它學會了規則。而且已知規則對
+`pelvis_peak_rotation` 與 `torso_peak_rotation` 兩個事件標錯位置，見
+`docs/batting-analysis.md`。
+
+事件詞彙共 19 槽，所有運動共用：10 個 canonical（跨運動力學定義相同）、
+3 個高爾夫專屬、6 個舉重專屬。舉重只用到 3 個 canonical，是共用詞彙適用邊界的直接證據。
+各運動的完整事件序列見 `docs/architecture.md` 的「已註冊運動項目」。
+
 ## Architecture
 
 四個階段，只有第三階段有學習參數。前後兩段是確定性計算，可以單獨單元測試。
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph S1["1 · 姿態抽取"]
         direction TB
         V["影片<br/>T 格"] --> RTM["RTMPose<br/>ONNX 推論"]
@@ -276,7 +300,7 @@ print(result.format())
 pytest
 ```
 
-110 個測試，全部不需要 GPU、不需要資料集、不需要網路（模型與弱標註以合成動作驗證）。
+118 個測試，全部不需要 GPU、不需要資料集、不需要網路（模型與弱標註以合成動作驗證）。
 
 測試重點在不變式而不是分數：順序約束解碼以窮舉法比對全域最佳解；特徵的平移／縮放／
 鏡射不變性；padding 不得被選為事件；checkpoint 與運動項目註冊表不一致時必須拒絕載入。
@@ -552,11 +576,12 @@ src/kinetic_chain/
   metrics.py         PCE 與容忍度（沿用 GolfDB 定義）
   data.py            Clip 記錄、批次組裝、分層切分
   analysis.py        動力鏈時序指標、投影品質診斷、不套順序假設的無約束量測
-  datasets/          GolfDB（真人）與 Penn Action（弱標註）轉接
+  datasets/          golfdb（真人）· pennaction · local_video · annotations
   train.py evaluate.py infer.py cli.py
-scripts/             實驗、視覺化與繪圖（輸出不含人物影像）
+scripts/             17 支實驗、視覺化與繪圖腳本，見 docs/data-map.md
 docs/figures/        README 與報告用的圖，皆為圖表，無人物影像
-tests/               110 個測試
+annotations/         人工標註 CSV（preview/ 不進版控）
+tests/               118 個測試
 docs/spec.md         需求、範圍與成功標準
 docs/architecture.md 系統、演算法與驗證設計
 docs/pitch-analysis.md 棒球投球動力鏈分析報告
