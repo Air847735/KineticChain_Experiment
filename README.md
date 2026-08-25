@@ -93,74 +93,37 @@ convolution）。一般卷積像拿一個小窗戶在時間軸上滑動，窗戶
 
 四個階段，只有第三階段有學習參數。前後兩段是確定性計算，可以單獨單元測試。
 
-```mermaid
-flowchart TB
-    subgraph S1["1 · 姿態抽取"]
-        direction TB
-        V["影片<br/>T 格"] --> RTM["RTMPose<br/>ONNX 推論"]
-        RTM --> KP["關鍵點<br/>T × 17 × 3"]
-        KP --> CAN["轉 canonical<br/>T × 13 × 3"]
-    end
-    subgraph S2["2 · 力學特徵（確定性）"]
-        direction TB
-        NORM["正規化<br/>骨盆置中 · 尺度 · 左右鏡射"] --> SG["Savitzky–Golay 平滑"]
-        SG --> DIFF["一階差分<br/>角速度 · 線速度"]
-        DIFF --> FEAT["特徵矩陣<br/>T × 58"]
-    end
-    subgraph S3["3 · 模型（唯一有參數）"]
-        direction TB
-        NET["KineticChainNet<br/>554,739 參數"] --> LOG["逐格 logits<br/>19 × T"]
-    end
-    subgraph S4["4 · 解碼（確定性）"]
-        direction TB
-        SMX["時間軸 softmax"] --> DP["順序約束動態規劃"]
-        DP --> OUT["事件影格 + 信心"]
-    end
-    CAN --> NORM
-    FEAT --> NET
-    LOG --> SMX
-```
+![管線與特徵的讀法](docs/figures/arch_pipeline.png)
 
-### 模型內部
+下半張圖是關鍵：**58 維特徵在模型裡是「通道」，不是一串數字。** 特徵矩陣轉置成
+`(58, T)` 餵給 `Conv1d`，卷積只沿時間軸滑動，在每一個時間位置上**一次讀進全部 58 個通道**。
+第 0 層的 1×1 卷積只混通道、完全不看時間；之後六層的膨脹卷積只沿時間滑動、不改變通道數。
+兩種卷積各自只動一個軸。
 
-```mermaid
-flowchart TB
-    IN["特徵 B × T × 58"] --> TP["轉置 → B × 58 × T"]
-    TP --> PROJ["Conv1d 58 → 128<br/>kernel 1"]
-    PROJ --> B0["殘差塊 · dilation 1"]
-    B0 --> B1["殘差塊 · dilation 2"]
-    B1 --> B2["殘差塊 · dilation 4"]
-    B2 --> B3["殘差塊 · dilation 8"]
-    B3 --> B4["殘差塊 · dilation 16"]
-    B4 --> B5["殘差塊 · dilation 32"]
-    B5 --> HEAD["Conv1d 128 → 19<br/>kernel 1"]
-    HEAD --> MASK["padding 位置填 −inf"]
-    MASK --> OUT["logits B × 19 × T"]
-```
+### 膨脹卷積怎麼讀時間軸
 
-輸入 58 維、輸出 19 個事件槽。六層 dilation 逐層加倍，雙向感受野 `1 + 2 × (5−1) × (1+2+4+8+16+32) = 505` 影格，
-覆蓋典型片段的全長（GolfDB 長度中位數 282 格）。時間解析度不損失——每一層的
-padding 都設成 `dilation × (kernel−1) ÷ 2`，長度全程等於 `T`。
+![膨脹卷積的抽樣位置與感受野](docs/figures/arch_dilation.png)
 
-單一殘差塊：
+每一層的窗戶永遠是 5 格，但**格子之間的間隔逐層加倍**（1、2、4、8、16、32）。
+第 1 層讀連續 5 格，第 6 層讀的 5 格橫跨 ±64。參數量每層固定 81,920 個，
+但雙向感受野從 ±4 長到 **±252（505 格 / 8.4 秒 @30fps）**。
 
-```mermaid
-flowchart TB
-    X["輸入 128 × T"] --> CV["Conv1d 128 → 128<br/>kernel 5 · dilation d · padding 2d"]
-    CV --> BN["BatchNorm1d"]
-    BN --> FILM["FiLM<br/>γ ⊙ h + β"]
-    FILM --> GE["GELU"]
-    GE --> DO["Dropout 0.1"]
-    DO --> ADD(["＋"])
-    X --> ADD
-    ADD --> Y["輸出 128 × T"]
-    EMB["運動項目 embedding<br/>32 維"] -. "γ, β 由此線性投影而來" .-> FILM
-```
+下半的對數圖說明為什麼是六層而不是三層或十層：第 4 層才涵蓋得了一次完整投球（74 格），
+第 6 層才涵蓋得了一次舉重（287 格）。再多層對這批資料沒有意義。
+
+時間解析度全程不損失——每一層的 padding 都設成 `dilation × (kernel−1) ÷ 2`，
+輸出長度恆等於 `T`。要的是「第 22 格」而不是「大約第 20 到 25 格」，所以不做任何降採樣。
+
+### 單一殘差塊
+
+![殘差塊與 FiLM 條件](docs/figures/arch_block.png)
 
 > **FiLM 條件在單運動訓練下不作用。** 它是為了讓一組權重涵蓋多個運動而加的；
 > 實測聯合訓練劣於單運動訓練（見 Results），所以預設是一個運動一個模型，此時
 > embedding 只有一個有效索引，FiLM 退化成固定的仿射轉換。保留是為了讓聯合訓練
 > 的路徑仍可執行與複驗。
+
+三張圖由 `python scripts/plot_architecture.py` 產生。
 
 ### 輸出與訓練目標
 
