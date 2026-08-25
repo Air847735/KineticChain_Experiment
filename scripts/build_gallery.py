@@ -107,6 +107,84 @@ ITEMS: tuple[tuple[str, str, str, str, str], ...] = (
 )
 
 
+#: 本機瀏覽用的樣式。圖以相對路徑引用，不內嵌，所以沒有檔案大小限制，
+#: 也保留原始解析度——比對細節時這點很重要。
+LOCAL_CSS = """
+:root{--bg:#EFEFEC;--card:#fff;--ink:#16181A;--muted:#5E656B;--faint:#8C9399;
+      --line:#D9DBD6;--hair:#E7E9E5;--accent:#7A5A2E;--warn:#9E3226}
+@media (prefers-color-scheme:dark){:root{--bg:#111312;--card:#1A1D1C;--ink:#E4E7E4;
+      --muted:#939A97;--faint:#6E7673;--line:#272B29;--hair:#202422;
+      --accent:#C99A5B;--warn:#DC7060}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);line-height:1.7;font-size:16px;
+     font-family:"PingFang TC","Noto Sans TC","Microsoft JhengHei",-apple-system,
+                 BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1500px;margin:0 auto;padding:36px 22px 90px}
+header{max-width:66ch;padding-bottom:20px;border-bottom:2px solid var(--ink)}
+h1{font-size:34px;margin:0 0 12px;letter-spacing:-.02em}
+.sub{color:var(--muted);margin:0 0 14px}
+.warn{border-left:3px solid var(--warn);padding:10px 0 10px 16px;margin:0}
+.warn p{margin:0 0 6px;font-size:14.5px;color:var(--muted)}
+.warn p:last-child{margin:0}
+.warn b{color:var(--ink)}
+nav{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);
+    padding:11px 0;display:flex;flex-wrap:wrap;gap:6px 16px;z-index:5}
+nav a{font-size:12px;color:var(--muted);text-decoration:none;white-space:nowrap}
+nav a:hover{color:var(--accent)}
+section{margin-top:44px;scroll-margin-top:56px}
+h2{font-size:21px;margin:0 0 16px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+figure{margin:0 0 22px;background:var(--card);border:1px solid var(--line)}
+figure img{display:block;width:100%;height:auto;border-bottom:1px solid var(--hair)}
+figcaption{padding:12px 15px}
+figcaption .cap{margin:0 0 6px;font-size:14px;color:var(--muted)}
+figcaption .meta{margin:0;font-size:11.5px;color:var(--faint);
+                 font-family:ui-monospace,Menlo,Consolas,monospace}
+figcaption .meta b{color:var(--ink);font-weight:600}
+"""
+
+
+def write_local_page(output: Path, copied: list[tuple[str, str, str, str]]) -> None:
+    """在 gallery/ 裡放一份 index.html，用瀏覽器打開就能一次看完。
+
+    圖以相對路徑引用而非 base64 內嵌：檔案小、開得快、保留原始解析度。
+    """
+    groups: dict[str, list[tuple[str, str, str]]] = {}
+    for name, group, caption, script in copied:
+        groups.setdefault(group, []).append((name, caption, script))
+
+    nav = "".join(f'<a href="#g{i}">{g}</a>' for i, g in enumerate(groups))
+    body = []
+    for index, (group, entries) in enumerate(groups.items()):
+        cards = "".join(
+            f'<figure><img src="{name}" alt="{caption}">'
+            f'<figcaption><p class="cap">{caption}</p>'
+            f'<p class="meta"><b>{name}</b> — {script}</p></figcaption></figure>'
+            for name, caption, script in entries
+        )
+        body.append(f'<section id="g{index}"><h2>{group}</h2>{cards}</section>')
+
+    html = f"""<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>實驗圖片總表</title><style>{LOCAL_CSS}</style></head><body>
+<div class="wrap">
+<header>
+  <h1>實驗圖片總表</h1>
+  <p class="sub">目前為止所有實驗的實際輸出，共 {len(copied)} 張，原始解析度。</p>
+  <div class="warn">
+    <p><b>只有高爾夫是真人標註。</b>其餘全部是規則推導的弱標註——影格對照圖下排寫
+    <code>rule</code> 而不是 <code>true</code> 就是這個意思。</p>
+    <p><b>命中／未中的標準跨運動不可比。</b>容忍度與動作長度成正比：高爾夫平均
+    2.7 影格、打擊 1.0、舉重 9.7。</p>
+  </div>
+</header>
+<nav>{nav}</nav>
+{"".join(body)}
+</div></body></html>
+"""
+    (output / "index.html").write_text(html, encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=Path("gallery"))
@@ -161,8 +239,10 @@ def main() -> int:
         lines += ["", "重跑對應的腳本即可補上。", ""]
 
     (args.output / "INDEX.md").write_text("\n".join(lines), encoding="utf-8")
+    write_local_page(args.output, copied)
 
     logger.info("複製 %d 張到 %s", len(copied), args.output)
+    logger.info("用瀏覽器開 %s 可以一次看完", args.output / "index.html")
     for item in missing:
         logger.warning("缺少來源：%s", item)
     return 0
