@@ -241,7 +241,19 @@ python -m kinetic_chain.cli eval --checkpoint runs/golf/model.pt \
 # 單支影片推論
 python -m kinetic_chain.cli infer \
   --checkpoint runs/golf/model.pt --video swing.mp4 --sport golf_swing
+
+# 未裁切的長影片：先切成一次次的動作
+python -m kinetic_chain.cli segment --video training_session.mp4 \
+    --activity-signal wrist_speed
+
+# 切完順便對每一段推論
+python -m kinetic_chain.cli segment --video training_session.mp4 \
+    --checkpoint runs/lift/model.pt --sport clean_and_jerk --json
 ```
+
+`segment` 會自己說切分可不可信。實測 12 支自備舉重影片只有 3 支標為可信，
+其餘都因為「動作延伸到影片邊界」——那些影片確實是舉完就結束。
+方法與已知限制見 `docs/architecture.md` 的「長影片切分」。
 
 `--sport` 給多個即為聯合訓練，`--init-from` 可從既有 checkpoint 微調。兩者都實測過，
 都沒有比單運動從頭訓練好（見 Results），保留只是為了讓你能自己驗證。
@@ -263,7 +275,7 @@ print(result.format())
 pytest
 ```
 
-118 個測試，全部不需要 GPU、不需要資料集、不需要網路（模型與弱標註以合成動作驗證）。
+130 個測試，全部不需要 GPU、不需要資料集、不需要網路（模型與弱標註以合成動作驗證）。
 
 測試重點在不變式而不是分數：順序約束解碼以窮舉法比對全域最佳解；特徵的平移／縮放／
 鏡射不變性；padding 不得被選為事件；checkpoint 與運動項目註冊表不一致時必須拒絕載入。
@@ -539,12 +551,13 @@ src/kinetic_chain/
   metrics.py         PCE 與容忍度（沿用 GolfDB 定義）
   data.py            Clip 記錄、批次組裝、分層切分
   analysis.py        動力鏈時序指標、投影品質診斷、不套順序假設的無約束量測
+  segment.py         未裁切長影片 → 一次次的動作片段（門檻式，無參數）
   datasets/          golfdb（真人）· pennaction · local_video · annotations
   train.py evaluate.py infer.py cli.py
 scripts/             17 支實驗、視覺化與繪圖腳本，見 docs/data-map.md
 docs/figures/        README 與報告用的圖，皆為圖表，無人物影像
 annotations/         人工標註 CSV（preview/ 不進版控）
-tests/               118 個測試
+tests/               130 個測試
 docs/spec.md         需求、範圍與成功標準
 docs/architecture.md 系統、演算法與驗證設計
 docs/pitch-analysis.md 棒球投球動力鏈分析報告

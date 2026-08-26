@@ -11,6 +11,7 @@ from pathlib import Path
 from .data import split_clips
 from .errors import KineticChainError
 from .events import get_sport, registered_sports
+from .segment import ACTIVE_FRACTION, MIN_ACTION_SECONDS
 
 DEFAULT_GOLFDB_ANNOTATIONS = Path("data/raw/golfDB.pkl")
 DEFAULT_GOLFDB_VIDEOS = Path("data/raw/videos_160")
@@ -182,6 +183,64 @@ def cmd_infer(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_segment(args: argparse.Namespace) -> int:
+    """把一支長影片切成一次次的動作，可選擇對每一段跑推論。"""
+    from .features import compute
+    from .pose import PoseExtractor
+    from .segment import find_actions
+    from .skeleton import to_canonical
+
+    extractor = PoseExtractor(device=args.pose_device, bbox_strategy=args.bbox_strategy)
+    sequence = extractor.extract_video(args.video, progress=True)
+    pose = to_canonical(sequence.keypoints, sequence.layout)
+    fps = sequence.fps
+    signals = compute(pose, fps, handedness_sensitive=False)
+    report = find_actions(
+        signals, fps,
+        activity_signal=args.activity_signal,
+        active_fraction=args.active_fraction,
+        min_action_seconds=args.min_action_seconds,
+    )
+
+    payload = report.as_dict()
+    payload["video"] = str(args.video)
+    payload["fps"] = fps
+    payload["num_frames"] = int(pose.shape[0])
+    for entry, seg in zip(payload["segments"], report.segments):
+        lo, hi = seg.seconds(fps)
+        entry["start_time"] = round(lo, 3)
+        entry["end_time"] = round(hi, 3)
+
+    # 每一段各自跑一次推論。切分只給邊界，事件仍由既有的模型與解碼負責。
+    if args.checkpoint is not None:
+        if args.sport is None:
+            raise KineticChainError("給了 --checkpoint 就必須同時給 --sport")
+        from .infer import predict_pose_sequence
+        from .train import load_checkpoint
+
+        model = load_checkpoint(args.checkpoint, device=args.device)
+        for entry, seg in zip(payload["segments"], report.segments):
+            result = predict_pose_sequence(
+                model, pose[seg.start : seg.end], fps, args.sport, device=args.device
+            )
+            entry["events"] = result.as_dict()["events"]
+
+    if args.json:
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    else:
+        print(f"{args.video}  {payload['num_frames']} 影格 @ {fps:.2f} fps")
+        print(f"  切出 {len(report.segments)} 段（活動量訊號 {report.activity_signal}）")
+        print(f"  {'可信' if report.should_trust else '**不可信**'}：{report.reason}")
+        for index, (entry, seg) in enumerate(zip(payload["segments"], report.segments), 1):
+            lo, hi = seg.seconds(fps)
+            print(
+                f"  第 {index:>2} 段  f{seg.start:>6}–{seg.end:<6}"
+                f"  {lo:>7.2f}–{hi:<7.2f} 秒  ({seg.num_frames} 格)"
+                f"  峰值強度 {seg.peak_activity:.2f}"
+            )
+    return 0 if report.should_trust else 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="kinetic-chain",
@@ -240,6 +299,30 @@ def build_parser() -> argparse.ArgumentParser:
     infer.add_argument("--bbox-strategy", choices=["detect", "whole_frame"], default="detect")
     infer.add_argument("--json", action="store_true")
     infer.set_defaults(func=cmd_infer)
+
+    segment = sub.add_parser(
+        "segment",
+        help="把未裁切的長影片切成一次次的動作；給 --checkpoint 就順便對每段推論",
+    )
+    segment.add_argument("--video", type=Path, required=True)
+    segment.add_argument(
+        "--checkpoint", type=Path, default=None,
+        help="給了就對每一段跑事件推論；不給就只輸出邊界",
+    )
+    segment.add_argument("--sport", default=None, help="搭配 --checkpoint 使用")
+    segment.add_argument(
+        "--activity-signal", default="body_speed",
+        help="當活動量的訊號。器械類動作身體位移小時改用 wrist_speed",
+    )
+    segment.add_argument("--active-fraction", type=float, default=ACTIVE_FRACTION)
+    segment.add_argument("--min-action-seconds", type=float, default=MIN_ACTION_SECONDS)
+    segment.add_argument("--device", default="cuda")
+    segment.add_argument("--pose-device", default="cuda")
+    segment.add_argument(
+        "--bbox-strategy", choices=["detect", "whole_frame"], default="detect"
+    )
+    segment.add_argument("--json", action="store_true")
+    segment.set_defaults(func=cmd_segment)
 
     return parser
 
