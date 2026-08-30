@@ -26,8 +26,16 @@
 
 ## 分期定義
 
-依 IWF 與生物力學文獻，挺舉的分期是：起始 → 第一拉（離地至膝）→ 過渡（雙膝彎曲）→
-第二拉（三重伸展）→ 接槓 → 站起 → 上挺預蹲 → 上挺發力 → 過頭鎖定。
+> **來源更正（2026-08-30）。** 本節初版寫「依 IWF 與生物力學文獻」，但**沒有指向任何
+> 具體出處**，而且對 IWF 的部分是錯的：IWF 的 TCRR 規範的是合法動作的判定
+> （槓不得先觸胸、雙腳須回到同一線、除雙腳外身體不得觸台），**完全沒有定義分期**。
+> 分期出自運動生物力學文獻，與 IWF 無關。以下是實際查到的來源。
+
+上膊的分期，文獻上是**六期**：第一拉 → 過渡 → 第二拉 → 轉腕 → 接槓 → 站起
+（Khuyagbaatar et al. 2024）。三段式的「第一拉／過渡／第二拉」最早出自
+Enoka 1979，Garhammer 1985 的奧運選手實測沿用；之後的文獻普遍在其後接上
+「轉腕／接槓／站起」（Werner et al. 2021 的用語）。上挺（jerk）另計，
+一般分為預蹲、發力、接槓鎖定、回位。
 
 本專案取其中有 2D 姿態對應的 9 個節點。**槓鈴本身沒有關鍵點，一律以手腕代理。**
 
@@ -43,8 +51,34 @@
 | `clean_overhead` | 過頭鎖定 | 手腕高度最大值 |
 | `finish` | 結束 | 全身速度回到靜止 |
 
-過渡期的雙膝彎曲（double knee bend）沒有納入——它是膝角的**局部**再屈曲，
-幅度小且在 30 fps 下只有兩三格，2D 姿態的雜訊蓋得過它。
+過渡期的雙膝彎曲（double knee bend）沒有納入——它是膝角的**局部**再屈曲，幅度小，
+30 fps 下估計只有兩三格。**這個估計沒有量過**，是憑印象寫的。
+
+### 對照文獻後查出的三個缺口
+
+| 文獻的節點 | 本專案 | 狀態 |
+|---|---|---|
+| 第一拉 | `clean_liftoff` → `clean_knee_pass` | 有 |
+| 過渡（雙膝彎曲） | — | **缺**，理由如上，未量化 |
+| **第二拉（三重伸展）** | — | **缺**，見下 |
+| 轉腕（turnover） | — | **缺** |
+| 接槓 | `clean_catch` | 有 |
+| 站起 | `clean_recovery` | 有 |
+| 上挺預蹲／發力／鎖定 | `clean_jerk_dip` / `arm_peak_velocity` / `clean_overhead` | 有 |
+
+**最嚴重的是第二拉。** 那是三重伸展發生的地方，也就是這個動作的動力鏈本身，
+本專案卻沒有任何事件標記它。目前的 `arm_peak_velocity` 依時間分布落在整段的
+**79.7%**，緊接在上挺預蹲（77.7%）之後——那是**上挺的發力**，不是上膊的第二拉。
+
+### 三重伸展的第三環被換掉了
+
+文獻的三重伸展是**髖 → 膝 → 踝**（Kipp et al. 2012；hang power clean 的實測顯示
+第二拉期間位移與角速度都呈近端到遠端）。本專案的 `EXTENSION_CHAIN_LINKS` 是
+**髖 → 膝 → 上肢**。
+
+踝關節量不到：canonical 13 點沒有腳趾，踝角需要足部節段才算得出來，
+所以第三環被換成了上肢。**這個替換先前只寫在 `analysis.py` 的註解裡，
+從未對照文獻說明過。** 換掉之後量的已經不是文獻定義的三重伸展。
 
 ## Canonical 詞彙在這裡失效
 
@@ -163,6 +197,13 @@ Penn Action 的挺舉片段以正面與 3/4 為主（88 段目視檢查過），
 
 直接量原始訊號的峰值，**不套任何順序假設**，搜尋窗為提鈴段（liftoff → catch）：
 
+> **窗的選擇不影響這個結果（2026-08-30 補測）。** 文獻把三重伸展放在第二拉，
+> 也就是過膝之後、接槓之前。把窗改成文獻定義的第二拉重算，成立率 40.0%，
+> 與現行的 41.7% 幾乎相同（n=60，窗長中位 32.5 對 36 格）。
+> 但若不設窗、在整段片段上取全域峰值，會掉到 31.7%——因為膝的伸展峰值有 45% 落到
+> 「站起」而非第二拉（站起的膝伸展幅度更大、時間更長）。**設窗是必要的，
+> 設在哪一段則不敏感。**
+
 | 量測範圍 | n | 髖→膝→上肢成立率 |
 |---|---|---|
 | 全部片段 | 60 | 41.7% |
@@ -220,4 +261,40 @@ Penn Action 的挺舉片段以正面與 3/4 為主（88 段目視檢查過），
   視角分層的每組樣本因此偏少（17 vs 43），組間差異不應當精確值看。
 - 踝關節那一環量不到（canonical 13 點沒有腳趾，測不到蹠屈），所以量的是
   「髖→膝→上肢」而不是完整的三重伸展。
-- 沒有槓鈴關鍵點，一律以手腕代理；握距與手腕角度的變化會混進來。
+- 沒有槓鈴關鍵點，一律以手腕代理；握距與手腕角度的變化會混進來。文獻的分期是定義在
+  **槓的軌跡**上（過膝、過髖），本專案以手腕代理，兩者的偏移量未量化。
+- **量的不是文獻定義的動力鏈。** 三重伸展是髖→膝→踝，本專案是髖→膝→上肢。
+  上肢在上膊的提鈴段是被動連接槓鈴的環節，不是發力環節，把它當第三環沒有文獻依據。
+- **缺三個文獻節點**：過渡（雙膝彎曲）、**第二拉**、轉腕。第二拉是三重伸展所在，
+  也就是動力鏈本身，卻沒有事件標記。
+
+## 參考來源
+
+分期定義：
+
+- Khuyagbaatar, B. et al. (2024). Kinematic Comparison of Snatch and Clean Lifts in
+  Weightlifters Using Wearable Inertial Measurement Unit Sensors. *Physical Activity and
+  Health*, 8(1), 1–9. [DOI 10.5334/paah.306](https://paahjournal.com/articles/10.5334/paah.306)
+  ——六期：1st pull、transition、2nd pull、turnover、catch、recovery。
+- Enoka, R. M. (1979). The pull in Olympic weightlifting. *Medicine and Science in
+  Sports*, 11(2), 131–137.——三段式「第一拉／過渡／第二拉」的原始出處。
+- Garhammer, J. (1985). Biomechanical profiles of Olympic weightlifters.
+  *International Journal of Sport Biomechanics*, 1(2), 122–130.
+  [連結](https://journals.humankinetics.com/view/journals/jab/1/2/article-p122.xml)
+- Werner, I., Szelenczy, N., Wachholz, F., & Federolf, P. (2021). How do movement patterns
+  in weightlifting (clean) change when using lighter or heavier barbell loads?
+  *Frontiers in Psychology*, 11, 606070.
+  [PMC7868553](https://pmc.ncbi.nlm.nih.gov/articles/PMC7868553/)
+
+三重伸展與近端到遠端序列：
+
+- Kipp, K., Redden, J., Sabick, M., & Harris, C. (2012). Kinematic and kinetic synergies
+  of the lower extremities during the pull in Olympic weightlifting. *Journal of Applied
+  Biomechanics*, 28(3), 271–278.
+  [連結](https://scholarworks.boisestate.edu/mecheng_facpubs/40/)
+
+**不是來源**：
+
+- IWF *Technical and Competition Rules & Regulations*
+  （[2020 版](https://iwf.sport/wp-content/uploads/downloads/2020/01/IWF_TCRR_2020.pdf)）
+  規範的是合法動作的判定，**沒有定義分期**。本文件初版誤引，已更正。
